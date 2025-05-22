@@ -33,7 +33,7 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
         loss.backward()
         optimizer.step()
 
-    if (epoch+1)%100==0:
+    if (epoch+1)%1==0:
         print("Epoch[{}/{}]: mus_loss:{:.3f}, vars_loss:{:.3f}, pis_loss:{:.3f}".format(epoch+1,
                                                                                         max_epochs,
                                                                                         mus_loss.item(),
@@ -43,4 +43,7 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
 
     if (epoch+1) % 500== 0:
         torch.save(model.state_dict(), "saved_files/bulkEncoder_model.pt")
+    
+    print("Saving bulkEncoder model...")
+    torch.save(model.state_dict(), "/home/shared-ssh-key/B2SC/saved_files/adamson_small/bulkEncoder_model.pt")
 

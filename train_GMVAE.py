@@ -51,23 +51,23 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         optimizer.step()
         total_loss += loss.item()
     
-    if (epoch+1) % 10 == 0:
+    if (epoch+1) % 5 == 0:
         pis = pis.mean(0)
         print(pis)
         print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f} Recon Loss: {loss_recon:.4f} Total Loss: {total_loss:.4f} Fraction Loss: {fraction_loss:.4f} ZINB Loss: {zinb_loss_val:.4f}')
 
-    if (epoch+1) % 100 == 0:
+    if (epoch+1) % 10 == 0:
         # Save reconstructed.
-        torch.save(reconstructed, 'saved_files/GMVAE_reconstructed.pt')
+        torch.save(reconstructed, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_reconstructed.pt')
 
         mus = mus.mean(0)
         logvars = logvars.mean(0)
         pis = pis.mean(0)
 
         # Save the mean, logvar, and pi.
-        torch.save(mus, 'saved_files/GMVAE_mus.pt')
-        torch.save(logvars, 'saved_files/GMVAE_logvars.pt')
-        torch.save(pis, 'saved_files/GMVAE_pis.pt')
+        torch.save(mus, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_mus.pt')
+        torch.save(logvars, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_logvars.pt')
+        torch.save(pis, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_pis.pt')
         print("GMVAE mu & var & pi saved.")
 
         model.eval()
@@ -99,7 +99,7 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         plt.xlabel('UMAP1')
         plt.ylabel('UMAP2')
         plt.title('UMAP of reparameterized z')
-        plt.savefig('saved_files/umap_latent.png')
+        plt.savefig('/home/shared-ssh-key/B2SC/saved_files/adamson_small/umap_latent.png')
         plt.close()
 
         plt.figure(figsize=(12, 10))
@@ -111,11 +111,11 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         plt.xlabel('UMAP1')
         plt.ylabel('UMAP2')
         plt.title('UMAP of Reconstructed Data')
-        plt.savefig('saved_files/umap_recon.png')
+        plt.savefig('/home/shared-ssh-key/B2SC/saved_files/adamson_small/umap_recon.png')
         plt.close()
 
 
-        torch.save(model.state_dict(), 'saved_files/GMVAE_model.pt')
+        torch.save(model.state_dict(), '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_model.pt')
         print("GMVAE Model saved.")
         
     
