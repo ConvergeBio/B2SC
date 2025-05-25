@@ -5,6 +5,7 @@ import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 import argparse
 import anndata
+from termcolor import colored
 
 # Set random seed.
 np.random.seed(4)
@@ -177,6 +178,17 @@ def configure(data_dir, barcode_path):
                                                                                         data_dir=data_dir,
                                                                                         barcode_path=barcode_path,
                                                                                         )
+    assert(len(dataset) > 0)
+    assert(len(dataset) == X_tensor.shape[0])
+    assert(len(np.unique(cell_types_tensor)) > 0)
+
+    unique_cell_type_ids = np.unique(cell_types_tensor)
+    print(f"Data contains {len(np.unique(unique_cell_type_ids))} cell types")
+    undetected_cell_tyeps = set(unique_cell_type_ids) - set(mapping_dict.keys())
+    if undetected_cell_tyeps:
+        print(colored(f"Warning: Data contains cell types that are not in the mapping_dict: {undetected_cell_tyeps}", "yellow"))
+        
+
     num_cells = X_tensor.shape[0]
     num_genes = X_tensor.shape[1]
 
@@ -200,7 +212,7 @@ def configure(data_dir, barcode_path):
 
     args.mapping_dict = mapping_dict
     args.color_map = get_colormap()
-    args.K = 34
+    args.K = 34 # number of cell types
     unique_cell_types = np.unique(cell_types_tensor)
     cell_type_fractions_ = []
 

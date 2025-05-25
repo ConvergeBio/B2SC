@@ -17,14 +17,17 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
         bulk_data = data.sum(dim=0)
         bulk_data = bulk_data.unsqueeze(0)
 
-        mus, logvars, pis = model(bulk_data)
+        mus, logvars, pis = model(bulk_data) # Predict mus (means), logvars (variances), pis (proportions)
 
         mus = mus.squeeze()
         logvars = logvars.squeeze()
         pis = pis.squeeze()
 
+        assert(mus.shape == scMus.shape)
         mus_loss = F.mse_loss(mus, scMus)
+        assert(logvars.shape == scLogVars.shape)
         logvars_loss = F.mse_loss(logvars, scLogVars)
+        assert(pis.shape == scPis.shape)
         pis_loss = F.mse_loss(pis, scPis)
 
         loss = mus_loss + logvars_loss + pis_loss
