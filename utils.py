@@ -6,11 +6,28 @@ from torch.utils.data import TensorDataset, DataLoader
 import argparse
 import anndata
 from termcolor import colored
+from sklearn.cluster import KMeans
+import cellxgene_census
 
 # Set random seed.
 np.random.seed(4)
 # Set torch seed.
 torch.manual_seed(4)
+
+def get_colormap_liver():
+    colormap_dict = {
+    'B cell': 'red',  # close to 'Naive B cells' / 'Memory B cells'
+    'Kupffer cell': 'brown',  # related to macrophages, fits earthy tones
+    'T cell': 'blue',  # general color from CD8+/CD4+ T cells
+    'endothelial cell': 'darkturquoise',  # from original list
+    'endothelial cell of hepatic sinusoid': 'lightseagreen',  # variant of endothelial
+    'hepatic stellate cell': 'olive',  # liver-resident cell, earthy tone
+    'hepatocyte': 'gold',  # distinctive and bright
+    'mature NK T cell': 'magenta',  # hybrid NK-T character, blends NK and T cell colors
+    'myeloid leukocyte': 'darkorange',  # aligned with myeloid/monocyte lineage
+    'natural killer cell': 'cyan'  # matching 'Natural killer cells'
+    }
+    return colormap_dict
 
 def get_celltype2int_dict():
     mapping_dict = {
@@ -56,115 +73,117 @@ def get_colormap():
     return color_map
 
 
-def load_data(data_dir, barcode_path):
+import scanpy as sc
+import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+import torch
+from torch.utils.data import TensorDataset
+
+def read_adata(data_dir: str) -> sc.AnnData:
+    """Load .h5ad or 10x directory into AnnData, ensure barcode index."""
     if data_dir.endswith(".h5ad"):
         adata = sc.read_h5ad(data_dir)
     else:
-        adata = sc.read_10x_mtx(data_dir, var_names='gene_symbols', cache=True)
+        adata = sc.read_10x_mtx(data_dir, var_names="gene_symbols", cache=True)
+    if adata.obs.index.name is None:
+        adata.obs.index.name = "barcodes"
+    return adata
 
-    # Read barcodes_with_labels tsv file.
-    barcodes_with_labels = pd.read_csv(barcode_path, sep=',', header=None).iloc[1:]
-    barcodes_with_labels.columns = ['barcodes', 'labels']
+def label_from_csv(adata: sc.AnnData, barcode_path: str,
+                   drop_labels: set = {"Unknown"}) -> sc.AnnData:
+    """Merge in real cell-type labels, dropping unwanted ones."""
+    df = (
+        pd.read_csv(barcode_path, header=None, names=["barcodes","labels"])
+          .iloc[1:]  # skip header row
+    )
+    df = df[~df["labels"].isin(drop_labels)]
+    adata = adata[adata.obs.index.isin(df["barcodes"])]
 
-    # Remove rows with 'unknown' or NaN labels
-    barcodes_with_labels = barcodes_with_labels[(barcodes_with_labels['labels'] != 'Unknown')]
+    adata.obs = (
+        adata.obs.reset_index(drop=False, names="barcodes")
+                 .merge(df, on="barcodes", how="left")
+    )
+    return adata
 
-    # Cleaned labels after filtering
-    labels = barcodes_with_labels['labels'].values
+def label_by_clustering(adata: sc.AnnData, n_clusters: int=5) -> sc.AnnData:
+    """Compute PCA → KMeans clusters → store as string labels."""
+    sc.tl.pca(adata, svd_solver="arpack")
+    X_pca = adata.obsm["X_pca"]
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+    clusters = kmeans.fit_predict(X_pca).astype(str)
+    adata.obs["labels"] = clusters
+    return adata
 
-    filtered_barcodes = barcodes_with_labels['barcodes'].values
-    adata = adata[adata.obs.index.isin(filtered_barcodes)]
+def encode_labels(labels: pd.Series) -> (torch.LongTensor, dict):
+    """
+    Map each unique label (string or digit) to a unique integer,
+    return tensor + reverse mapping.
+    """
+    unique = list(labels.cat.categories) if hasattr(labels, "cat") else sorted(labels.unique())
+    label2int = {}
+    next_int = 0
+    for lab in unique:
+        label2int[lab] = int(lab) if lab.isdigit() else next_int
+        next_int = max(next_int, label2int[lab] + 1)
+    int_series = labels.map(label2int).astype(int)
+    return torch.LongTensor(int_series.values), label2int
 
-    adata.obs['barcodes'] = adata.obs.index
+def split_and_package(X: np.ndarray, labels: torch.LongTensor,
+                      train_frac: float=1.0, seed: int=0):
+    """Random train-only split, return TensorDataset + raw arrays."""
+    torch.manual_seed(seed)
+    n = X.shape[0]
+    idx = torch.randperm(n)
+    cut = int(train_frac * n)
+    train_idx = idx[:cut]
+    X_train = torch.Tensor(X[train_idx.numpy()])
+    y_train = labels[train_idx]
+    ds = TensorDataset(X_train, y_train)
+    return ds, X_train, y_train
 
-    adata.obs = adata.obs.reset_index(drop=True)
-    adata.obs = adata.obs.merge(barcodes_with_labels, on='barcodes', how='left')
-    adata.X = adata.X.toarray()
-    adata.obs.index = adata.obs.index.astype(str)
+def load_data(
+    data_dir: str,
+    barcode_path: str = None,
+    generate_pseudo_cells: bool = False,
+    n_clusters: int = 5,
+    train_frac: float = 0.8
+):
+    # 1) I/O
+    adata = read_adata(data_dir)
 
-    mapping_dict = get_celltype2strint_dict()
-    
-
-    adata.obs['labels'] = adata.obs['labels'].replace(mapping_dict)
-    adata.obs['labels'] = adata.obs['labels'].astype('category')
-    
-
-    # Assuming adata is your DataFrame and labels is adata.obs['labels']
-    labels = adata.obs['labels']
-    # import pdb; pdb.set_trace()
-
-    # Create a custom mapping from unique strings to integers
-    label_to_int = {}
-    max_int_label = -1
-
-    for label in labels.unique():
-        if label.isdigit():  # Check if the label is numeric
-            int_val = int(label)
-            label_to_int[label] = int_val
-            max_int_label = max(max_int_label, int_val)
+    # 2) Labeling
+    if generate_pseudo_cells:
+        adata = label_by_clustering(adata, n_clusters=n_clusters)
+    else:
+        if 'cell_type' not in adata.obs.columns and barcode_path is None:
+            raise ValueError("barcode_path is required unless generate_pseudo_cells=True")
+        elif 'cell_type' in adata.obs.columns:
+            adata.obs["labels"] = adata.obs["cell_type"]
         else:
-            # For non-numeric labels, assign a unique integer
-            # starting from the next integer after the highest numeric label
-            if label not in label_to_int:
-                max_int_label += 1
-                label_to_int[label] = max_int_label
+            adata = label_from_csv(adata, barcode_path)
 
-    # Map the labels in your DataFrame to integers
-    int_labels = labels.map(label_to_int)
+    # Force categorical dtype (keeps ordering stable)
 
-    # Convert the Series of integers to a LongTensor
-    labels = torch.LongTensor(int_labels.values)
+    adata.obs["labels"] = adata.obs["labels"].astype("category")
 
-    # import pdb; pdb.set_trace()
-    # Verify the tensor
-    print(labels)
-    
-    # Plot UMAP with get_colormap().
-    # color_map = get_colormap()
-    # import umap
-    # import matplotlib.pyplot as plt
-    # mapping_dict = get_celltype2int_dict()
-    # label_map = {v: k for k, v in mapping_dict.items()}
-
-    # reducer = umap.UMAP()
-    # embedding = reducer.fit_transform(adata.X)
-    # plt.figure(figsize=(12, 10))
-    # # import pdb; pdb.set_trace()
-    # plt.scatter(embedding[:, 0], embedding[:, 1], c=[color_map[label_map[label.item()]] for label in labels], s=5)
-    # # Remove ticks
-    # plt.xticks([])
-    # plt.yticks([])
-    # # Name the axes.
-    # plt.xlabel('UMAP1')
-    # plt.ylabel('UMAP2')
-    # plt.title('UMAP of Input Data')
-    # plt.savefig('umap_input.png')
-    # plt.close()
-    # import pdb; pdb.set_trace()
-
-
-    X_tensor = torch.Tensor(adata.X)
-    # randomly sample 80% of the data.
-    rand_index = np.random.choice(X_tensor.shape[0], int(0.8*X_tensor.shape[0]), replace=False)
-    # Select those not in the random index to be the test set.
-    X_tensor = X_tensor[rand_index]
-    # expose gene names for later alignment
+    # 3) Encoding
+    labels_tensor, mapping_dict = encode_labels(adata.obs["labels"])
+    # turn sparse → dense
+    X = adata.X.toarray() if not isinstance(adata.X, np.ndarray) else adata.X
     gene_list = adata.var_names.tolist()
-    labels = labels[rand_index]
-    
 
-    # mask = np.isin(np.arange(X_tensor.shape[0]), rand_index, invert=True)
-    # X_tensor = X_tensor[mask]
-    # labels = labels[mask]
-    print(f"Shape of X_tensor: {X_tensor.shape}")
-    print(f"Shape of labels: {labels.shape}")
+    # 4) Split & package
+    dataset, X_train, y_train = split_and_package(X, labels_tensor, train_frac)
 
-    dataset = TensorDataset(X_tensor, labels)
+    # compute cell-type (or pseudo-type) fractions on full data
+    counts = adata.obs["labels"].value_counts().sort_index()
+    cell_type_fractions = counts.values / counts.values.sum()
+    # cell_type_fractions_non_zero = cell_type_fractions[cell_type_fractions > 0]
+    # print(f"Cell type fractions: {cell_type_fractions_non_zero}")
 
-    # Cell type fractions
-    cell_type_fractions = np.unique(adata.obs['labels'].values, return_counts=True)[1]/len(adata.obs['labels'].values)
-    
-    return dataset, X_tensor, labels, cell_type_fractions, mapping_dict, gene_list
+    return dataset, X_train, y_train, cell_type_fractions, mapping_dict, gene_list
+
 
 
 def get_saved_GMM_params(mus_path, vars_path):
@@ -173,10 +192,11 @@ def get_saved_GMM_params(mus_path, vars_path):
     return gmm_mus_celltypes, gmm_vars_celltypes
 
 
-def configure(data_dir, barcode_path):
+def configure(data_dir, barcode_path, generate_pseudo_cells=False):
     dataset, X_tensor, cell_types_tensor, cell_type_fractions, mapping_dict, gene_list = load_data(
                                                                                         data_dir=data_dir,
                                                                                         barcode_path=barcode_path,
+                                                                                        generate_pseudo_cells=generate_pseudo_cells
                                                                                         )
     assert(len(dataset) > 0)
     assert(len(dataset) == X_tensor.shape[0])
@@ -184,7 +204,7 @@ def configure(data_dir, barcode_path):
 
     unique_cell_type_ids = np.unique(cell_types_tensor)
     print(f"Data contains {len(np.unique(unique_cell_type_ids))} cell types")
-    undetected_cell_tyeps = set(unique_cell_type_ids) - set(mapping_dict.keys())
+    undetected_cell_tyeps = set(unique_cell_type_ids) - set(mapping_dict.values())
     if undetected_cell_tyeps:
         print(colored(f"Warning: Data contains cell types that are not in the mapping_dict: {undetected_cell_tyeps}", "yellow"))
         
@@ -199,8 +219,8 @@ def configure(data_dir, barcode_path):
     # args.learning_rate = 1e-3
     args.hidden_dim = 600
     args.latent_dim = 300
-    args.train_GMVAE_epochs = 3
-    args.bulk_encoder_epochs = 3
+    args.train_GMVAE_epochs = 2
+    args.bulk_encoder_epochs = 2
     # args.dropout = 0.05
     args.batch_size = num_cells
     args.input_dim = num_genes
@@ -211,16 +231,20 @@ def configure(data_dir, barcode_path):
     args.cell_types_tensor = cell_types_tensor
 
     args.mapping_dict = mapping_dict
-    args.color_map = get_colormap()
-    args.K = 34 # number of cell types
+
     unique_cell_types = np.unique(cell_types_tensor)
+    relevant_cell_types = [k for k, v in args.mapping_dict.items() if v in unique_cell_types]
+    
     cell_type_fractions_ = []
 
     # Create a dictionary mapping from cell type to its fraction
-    cell_type_to_fraction = {cell_type: fraction for cell_type, fraction in zip(unique_cell_types, cell_type_fractions)}
-    
+    cell_type_to_fraction = {cell_type: cell_type_fractions[cell_type] for cell_type in unique_cell_types}
 
-    for i in range(args.K):
+    args.color_map = get_colormap_liver()
+    # args.K = 34 # number of cell types
+
+    
+    for i in range(max(cell_type_to_fraction.keys())+1):
         # Append the fraction if the cell type is present, else append 0
         cell_type_fractions_.append(cell_type_to_fraction.get(i, 0))
     

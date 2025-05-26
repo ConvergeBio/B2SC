@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 
-def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataloader, scMus, scLogVars, scPis, device='cuda'):
+def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataloader, scMus, scLogVars, scPis, device='cuda', base_dir='saved_files/'):
 
     model.train()
     model = model.to(device)
@@ -45,8 +45,8 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
                                                                                         pis_loss.item()))
 
     if (epoch+1) % 500== 0:
-        torch.save(model.state_dict(), "saved_files/bulkEncoder_model.pt")
+        torch.save(model.state_dict(), base_dir + 'bulkEncoder_model.pt')
     
     print("Saving bulkEncoder model...")
-    torch.save(model.state_dict(), "/home/shared-ssh-key/B2SC/saved_files/adamson_small/bulkEncoder_model.pt")
+    torch.save(model.state_dict(), base_dir + 'bulkEncoder_model.pt')
 

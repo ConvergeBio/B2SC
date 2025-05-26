@@ -3,7 +3,7 @@ import numpy as np
 import umap
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
-
+from pathlib import Path
 
 
 def zinb_loss(y_true, y_pred, pi, r, eps=1e-10):
@@ -21,18 +21,38 @@ def zinb_loss(y_true, y_pred, pi, r, eps=1e-10):
     return -torch.mean(zero_case + nb_case)
 
 
-def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, device='cuda'):
+def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, device='cuda', base_dir=None, plot_umap=False):
+    assert base_dir is not None
+    assert(isinstance(base_dir, str) or isinstance(base_dir, Path))
     model.train()
     total_loss = 0
     model = model.to(device)
 
     for idx, (data, labels) in enumerate(dataloader):
+        mask = data != 0
+        nonzero_idx = mask.nonzero(as_tuple=False)
+        assert nonzero_idx.size(0) > 0, "ERROR: got an all-zero data batch!"
         data = data.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad()
         reconstructed, mus, logvars, pis, zs = model(data, labels)
-        
+        assert(reconstructed.shape == data.shape)
+
+        # # check each of the VAE outputs for “all-zero”
+        # for name, tensor in (("mus", mus),
+        #                     ("logvars", logvars),
+        #                     ("pis", pis),
+        #                     ("zs", zs)):
+        #         # 1) detach from graph, 2) optionally move to CPU for printing
+        #         t = tensor.detach().cpu()
+        #         # 3) build a mask of non-zeros
+        #         mask = t != 0
+        #         # 4) find all the positions
+        #         nonzero_idx = mask.nonzero(as_tuple=False)
+        #         # 5) assert there was at least one
+        #         assert nonzero_idx.size(0) > 0, f"ERROR: `{name}` is an all-zero tensor!"
+
 
         proportion_tensor_reshaped = proportion_tensor.to(pis.device)
         # import pdb; pdb.set_trace()
@@ -49,74 +69,76 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         loss.backward()
 
         optimizer.step()
+        print("Loss:", loss.item())
         total_loss += loss.item()
     
-    if (epoch+1) % 5 == 0:
+    
+    if (epoch+1) % 1 == 0:
         pis = pis.mean(0)
         print(pis)
-        print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f} Recon Loss: {loss_recon:.4f} Total Loss: {total_loss:.4f} Fraction Loss: {fraction_loss:.4f} ZINB Loss: {zinb_loss_val:.4f}')
+        print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f}\n Recon Loss: {loss_recon:.4f}\n Total Loss: {total_loss:.4f}\n Fraction Loss: {fraction_loss:.4f}\n ZINB Loss: {zinb_loss_val:.4f}')
 
-    if (epoch+1) % 10 == 0:
         # Save reconstructed.
-        torch.save(reconstructed, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_reconstructed.pt')
+        print("Saving reconstructed to folder:", base_dir)
+        torch.save(reconstructed, base_dir + 'GMVAE_reconstructed.pt')
 
         mus = mus.mean(0)
         logvars = logvars.mean(0)
         pis = pis.mean(0)
 
         # Save the mean, logvar, and pi.
-        torch.save(mus, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_mus.pt')
-        torch.save(logvars, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_logvars.pt')
-        torch.save(pis, '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_pis.pt')
+        print("Saving mus, logvars, and pis to folder:", base_dir)
+        torch.save(mus, base_dir + 'GMVAE_mus.pt')
+        torch.save(logvars, base_dir + 'GMVAE_logvars.pt')
+        torch.save(pis, base_dir + 'GMVAE_pis.pt')
         print("GMVAE mu & var & pi saved.")
 
         model.eval()
-
-        k = labels.cpu().detach().numpy()
-        
-        # Generate QQ plot for reconstructed data.
-        reconstructed = reconstructed.cpu().detach().numpy()
-
-        z = zs.cpu().detach().numpy()
-
-        # Convert all_labels to colors using the color_map
-        label_map = {v: k for k, v in mapping_dict.items()}
-        mean_colors = [color_map[label_map[str(label.item())]] for label in k]
-        z_colors = [color_map[label_map[str(label.item())]] for label in k]
-
-        # UMAP transformation of recon
-        reducer = umap.UMAP()
-        embedding_z = reducer.fit_transform(z)
-        embedding_recon = reducer.fit_transform(reconstructed)
- 
-
-        plt.figure(figsize=(12, 10))
-        plt.scatter(embedding_z[:, 0], embedding_z[:, 1], c=z_colors, s=5)
-        # Remove ticks
-        plt.xticks([])
-        plt.yticks([])
-        # Name the axes.
-        plt.xlabel('UMAP1')
-        plt.ylabel('UMAP2')
-        plt.title('UMAP of reparameterized z')
-        plt.savefig('/home/shared-ssh-key/B2SC/saved_files/adamson_small/umap_latent.png')
-        plt.close()
-
-        plt.figure(figsize=(12, 10))
-        plt.scatter(embedding_recon[:, 0], embedding_recon[:, 1], c=mean_colors, s=5)
-        # Remove ticks
-        plt.xticks([])
-        plt.yticks([])
-        # Name the axes.
-        plt.xlabel('UMAP1')
-        plt.ylabel('UMAP2')
-        plt.title('UMAP of Reconstructed Data')
-        plt.savefig('/home/shared-ssh-key/B2SC/saved_files/adamson_small/umap_recon.png')
-        plt.close()
-
-
-        torch.save(model.state_dict(), '/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_model.pt')
+        torch.save(model.state_dict(), base_dir + 'GMVAE_model.pt')
         print("GMVAE Model saved.")
-        
+
+        if plot_umap:
+            print("Plotting UMAP...")
+            k = labels.cpu().detach().numpy()
+            
+            # Generate QQ plot for reconstructed data.
+            reconstructed = reconstructed.cpu().detach().numpy()
+
+            z = zs.cpu().detach().numpy()
+
+            # Convert all_labels to colors using the color_map
+            label_map = {str(v): k for k, v in mapping_dict.items()}
+            mean_colors = [color_map[label_map[str(label.item())]] for label in k]
+            z_colors = [color_map[label_map[str(label.item())]] for label in k]
+
+            # UMAP transformation of recon
+            reducer = umap.UMAP()
+            embedding_z = reducer.fit_transform(z)
+            embedding_recon = reducer.fit_transform(reconstructed)
     
+
+            plt.figure(figsize=(12, 10))
+            plt.scatter(embedding_z[:, 0], embedding_z[:, 1], c=z_colors, s=5)
+            # Remove ticks
+            plt.xticks([])
+            plt.yticks([])
+            # Name the axes.
+            plt.xlabel('UMAP1')
+            plt.ylabel('UMAP2')
+            plt.title('UMAP of reparameterized z')
+            plt.savefig(base_dir + 'umap_latent.png')
+            plt.close()
+
+            plt.figure(figsize=(12, 10))
+            plt.scatter(embedding_recon[:, 0], embedding_recon[:, 1], c=mean_colors, s=5)
+            # Remove ticks
+            plt.xticks([])
+            plt.yticks([])
+            # Name the axes.
+            plt.xlabel('UMAP1')
+            plt.ylabel('UMAP2')
+            plt.title('UMAP of Reconstructed Data')
+            plt.savefig(base_dir + 'umap_recon.png')
+            plt.close()
+
     return total_loss

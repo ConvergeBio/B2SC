@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 class GaussianMixtureVAE(nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_components):
+        print("Initializing GaussianMixtureVAE with input_dim:", input_dim, "hidden_dim:", hidden_dim, "latent_dim:", latent_dim, "n_components:", n_components)
         super(GaussianMixtureVAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
