@@ -7,7 +7,6 @@ import argparse
 import anndata
 from termcolor import colored
 from sklearn.cluster import KMeans
-import cellxgene_census
 
 # Set random seed.
 np.random.seed(4)
@@ -147,10 +146,15 @@ def load_data(
     barcode_path: str = None,
     generate_pseudo_cells: bool = False,
     n_clusters: int = 5,
-    train_frac: float = 0.8
+    train_frac: float = 0.8, 
+    normalize_data : bool = True
 ):
     # 1) I/O
     adata = read_adata(data_dir)
+    if normalize_data:
+        print("Normalizing data...")
+        sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
+        sc.pp.log1p(adata)
 
     # 2) Labeling
     if generate_pseudo_cells:
@@ -216,29 +220,30 @@ def configure(data_dir, barcode_path, generate_pseudo_cells=False):
     
     args = parser.parse_args()
     args.num_cells = num_cells
-    # args.learning_rate = 1e-3
+    args.learning_rate = 1e-3
     args.hidden_dim = 600
     args.latent_dim = 300
-    args.train_GMVAE_epochs = 2
-    args.bulk_encoder_epochs = 2
+    args.train_GMVAE_epochs = 1
+    args.bulk_encoder_epochs = 1
     # args.dropout = 0.05
-    args.batch_size = num_cells
+    args.batch_size = num_cells//5
     args.input_dim = num_genes
+    print(f"Batch size: {args.batch_size}")
     
-    dataloader = DataLoader(dataset, batch_size=num_cells//5, shuffle=True, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 
     args.dataloader = dataloader
     args.cell_types_tensor = cell_types_tensor
 
     args.mapping_dict = mapping_dict
 
-    unique_cell_types = np.unique(cell_types_tensor)
-    relevant_cell_types = [k for k, v in args.mapping_dict.items() if v in unique_cell_types]
+    args.unique_cell_types = np.unique(cell_types_tensor)
+    relevant_cell_types = [k for k, v in args.mapping_dict.items() if v in args.unique_cell_types]
     
     cell_type_fractions_ = []
 
     # Create a dictionary mapping from cell type to its fraction
-    cell_type_to_fraction = {cell_type: cell_type_fractions[cell_type] for cell_type in unique_cell_types}
+    cell_type_to_fraction = {cell_type: cell_type_fractions[cell_type] for cell_type in args.unique_cell_types}
 
     args.color_map = get_colormap_liver()
     # args.K = 34 # number of cell types

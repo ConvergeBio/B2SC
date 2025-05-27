@@ -4,7 +4,7 @@ import umap
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from pathlib import Path
-
+from termcolor import colored
 
 def zinb_loss(y_true, y_pred, pi, r, eps=1e-10):
     y_true = y_true.float()
@@ -29,35 +29,35 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
     model = model.to(device)
 
     for idx, (data, labels) in enumerate(dataloader):
-        mask = data != 0
-        nonzero_idx = mask.nonzero(as_tuple=False)
-        assert nonzero_idx.size(0) > 0, "ERROR: got an all-zero data batch!"
+        # mask = data != 0
+        # nonzero_idx = mask.nonzero(as_tuple=False)
+        # assert nonzero_idx.size(0) > 0, "ERROR: got an all-zero data batch!"
         data = data.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad()
         reconstructed, mus, logvars, pis, zs = model(data, labels)
+        if epoch == 0 and idx == 0:
+            print("************************************* First batch of data: *************************************************")
+            print("reconstructed.shape:", reconstructed.shape)
+            print("data.shape:", data.shape)
+            print("mus.shape:", mus.shape)
+            print("logvars.shape:", logvars.shape)
+            print("pis.shape:", pis.shape)
+            print("zs.shape:", zs.shape)
+        
         assert(reconstructed.shape == data.shape)
-
-        # # check each of the VAE outputs for “all-zero”
-        # for name, tensor in (("mus", mus),
-        #                     ("logvars", logvars),
-        #                     ("pis", pis),
-        #                     ("zs", zs)):
-        #         # 1) detach from graph, 2) optionally move to CPU for printing
-        #         t = tensor.detach().cpu()
-        #         # 3) build a mask of non-zeros
-        #         mask = t != 0
-        #         # 4) find all the positions
-        #         nonzero_idx = mask.nonzero(as_tuple=False)
-        #         # 5) assert there was at least one
-        #         assert nonzero_idx.size(0) > 0, f"ERROR: `{name}` is an all-zero tensor!"
-
-
+        
         proportion_tensor_reshaped = proportion_tensor.to(pis.device)
         # import pdb; pdb.set_trace()
+
         fraction_loss =  F.mse_loss(pis.mean(0), proportion_tensor_reshaped)
         loss_recon = F.mse_loss(reconstructed, data)
+
+
+        # print(data.shape, reconstructed.shape)
+        # print(model.module.prob_extra_zero.shape)
+        # print(model.module.over_disp.shape)
 
         zinb_loss_val = zinb_loss(data, reconstructed, model.module.prob_extra_zero, model.module.over_disp)
 
@@ -65,32 +65,37 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         loss_kl = loss_kl * kl_weight
         loss_kl = 1 if loss_kl > 1 else loss_kl
         
-        loss = loss_recon + loss_kl + fraction_loss + zinb_loss_val
+        loss = loss_recon +  zinb_loss_val + fraction_loss + loss_kl
         loss.backward()
 
+        # for name, param in model.named_parameters():
+        #     if param.grad is not None:
+        #         grad_norm = param.grad.norm().item()
+        #         print(f"Grad | {name:30}: {grad_norm:.4e}")
+
         optimizer.step()
-        print("Loss:", loss.item())
+        print(colored(f"Loss: {loss.item():.4f}", 'magenta'))
         total_loss += loss.item()
     
-    
-    if (epoch+1) % 1 == 0:
-        pis = pis.mean(0)
-        print(pis)
+    print("Epoch finished")
+
+    if ((epoch+1) % 5 == 0) and (epoch != max_epochs - 1):
+        print("Saving intermediate results to folder:", base_dir)
         print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f}\n Recon Loss: {loss_recon:.4f}\n Total Loss: {total_loss:.4f}\n Fraction Loss: {fraction_loss:.4f}\n ZINB Loss: {zinb_loss_val:.4f}')
 
         # Save reconstructed.
         print("Saving reconstructed to folder:", base_dir)
-        torch.save(reconstructed, base_dir + 'GMVAE_reconstructed.pt')
+        torch.save(reconstructed, base_dir + '/GMVAE_reconstructed.pt')
 
         mus = mus.mean(0)
         logvars = logvars.mean(0)
         pis = pis.mean(0)
-
+        
         # Save the mean, logvar, and pi.
         print("Saving mus, logvars, and pis to folder:", base_dir)
-        torch.save(mus, base_dir + 'GMVAE_mus.pt')
-        torch.save(logvars, base_dir + 'GMVAE_logvars.pt')
-        torch.save(pis, base_dir + 'GMVAE_pis.pt')
+        torch.save(mus, base_dir + '/GMVAE_mus.pt')
+        torch.save(logvars, base_dir + '/GMVAE_logvars.pt')
+        torch.save(pis, base_dir + '/GMVAE_pis.pt')
         print("GMVAE mu & var & pi saved.")
 
         model.eval()
@@ -141,4 +146,29 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
             plt.savefig(base_dir + 'umap_recon.png')
             plt.close()
 
+    elif epoch == max_epochs - 1:
+        print("Saving final results to folder:", base_dir)
+        
+
+        print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f}\n Recon Loss: {loss_recon:.4f}\n Total Loss: {total_loss:.4f}\n Fraction Loss: {fraction_loss:.4f}\n ZINB Loss: {zinb_loss_val:.4f}')
+
+        # Save reconstructed.
+        print("Saving reconstructed to folder:", base_dir)
+        torch.save(reconstructed, base_dir + 'GMVAE_reconstructed.pt')
+
+        mus = mus.mean(0)
+        logvars = logvars.mean(0)
+        pis = pis.mean(0)
+
+        # Save the mean, logvar, and pi.
+        print("Saving mus, logvars, and pis to folder:", base_dir)
+        torch.save(mus, base_dir + '/GMVAE_mus.pt')
+        torch.save(logvars, base_dir + '/GMVAE_logvars.pt')
+        torch.save(pis, base_dir + '/GMVAE_pis.pt')
+        print("GMVAE mu & var & pi saved.")
+
+        model.eval()
+        torch.save(model.state_dict(), base_dir + '/GMVAE_model.pt')
+        print("GMVAE Model saved.")
+    
     return total_loss

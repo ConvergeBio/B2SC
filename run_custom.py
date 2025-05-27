@@ -9,7 +9,7 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
     print(f"Using device: {device}")
     barcode_fp = None
-    BASE_DIR = Path("convergeSC-Internal/bulk2single/data/")
+    BASE_DIR = Path("../convergeSC-Internal/bulk2single/data/")
     assert BASE_DIR.exists()
 
     # ── 1) Configure using your sc reference
@@ -34,6 +34,7 @@ if __name__ == "__main__":
         color_map         = args.color_map,
         model_param_tuple = (args.input_dim, args.hidden_dim, args.latent_dim, len(args.cell_type_fractions)),
         device            = device,
+        learning_rate     = args.learning_rate,
         base_dir          = BASE_DIR
     )
 
@@ -53,7 +54,6 @@ if __name__ == "__main__":
         bulk_h5ad_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_pseudobulk.h5ad",
         gene_list     = args.gene_list,
         batch_size    = None,   # or set to e.g. 1 or N,
-        base_dir      = BASE_DIR
     )
 
     # The existing `generate` in generate.py expects (bulkEncoder_model, GMVAE_model, loader, ...)
@@ -62,15 +62,15 @@ if __name__ == "__main__":
     # Here’s how you’d call it if it already supports a bulk loader:
     from models import GaussianMixtureVAE, bulkEncoder
     # reload the two trained models
-    input_dim, hidden_dim, latent_dim, K = args.input_dim, args.hidden_dim, args.latent_dim, args.K
-    gmvae = GaussianMixtureVAE(input_dim, hidden_dim, latent_dim, K)
+    input_dim, hidden_dim, latent_dim, K = args.input_dim, args.hidden_dim, args.latent_dim, len(args.cell_type_fractions)
+    gmvae = GaussianMixtureVAE(input_dim, hidden_dim, latent_dim,  K)
     be   = bulkEncoder(input_dim, hidden_dim, latent_dim, K)
 
     gmvae = torch.nn.DataParallel(gmvae).to(device)
     be    = be.to(device)
 
-    gmvae.load_state_dict(torch.load("/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_model.pt"), strict=True)
-    be.load_state_dict(torch.load("/home/shared-ssh-key/B2SC/saved_files/adamson_small/bulkEncoder_model.pt"), strict=True)
+    gmvae.load_state_dict(torch.load(BASE_DIR.as_posix() + "/GMVAE_model.pt"), strict=True)
+    be.load_state_dict(torch.load(BASE_DIR.as_posix() + "/bulkEncoder_model.pt"), strict=True)
 
     # Finally generate:
     generate(encoder=be, GMVAE_model=gmvae, dataloader=bulk_loader, num_cells=1000, mapping_dict=args.mapping_dict, color_map=args.color_map, device=device)

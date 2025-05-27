@@ -13,7 +13,9 @@ def train_model_GMVAE(max_epochs,
                       color_map,
                       model_param_tuple,
                       device='cuda',
-                      base_dir='saved_files/'):
+                      learning_rate=1e-3,
+                      base_dir='saved_files/',
+                      load_pretrained=False):
 
     # Check if pre-trained weights are available.
     assert base_dir is not None
@@ -25,18 +27,18 @@ def train_model_GMVAE(max_epochs,
     GMVAE_logvars_cpt_path = base_dir + "/models/GMVAE_logvars.pt"
     GMVAE_pis_cpt_path = base_dir + "/models/GMVAE_pis.pt"
     GMVAE_model_cpt_path = base_dir + "/models/GMVAE_model.pt"
-    if os.path.exists(GMVAE_mus_cpt_path) and os.path.exists(GMVAE_logvars_cpt_path) and os.path.exists(GMVAE_pis_cpt_path):
+    if load_pretrained and os.path.exists(GMVAE_mus_cpt_path) and os.path.exists(GMVAE_logvars_cpt_path) and os.path.exists(GMVAE_pis_cpt_path):
         print(colored(f"Pre-trained GMVAE_mus and GMVAE_logvars EXIST at {base_dir}. Skipping training.", "green"))
         return 0
     else:
-        print(colored(f"Pre-trained GMVAE_mus and GMVAE_logvars DO NOT EXIST at {base_dir}.\nTraining for {max_epochs} epochs.", "yellow"))
+        print(colored(f"Pre-trained GMVAE_mus, GMVAE_logvars, and GMVAE_pis DO NOT EXIST at {base_dir} or load_pretrained=False.\nTraining for {max_epochs} epochs.", "yellow"))
 
         from models import GaussianMixtureVAE
         from train_GMVAE import train_GMVAE
 
         input_dim, hidden_dim, latent_dim, K = model_param_tuple
         GMVAE_model = GaussianMixtureVAE(input_dim, hidden_dim, latent_dim, K)
-        optimizer = torch.optim.Adam(GMVAE_model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(GMVAE_model.parameters(), lr=learning_rate)
         print(f"Using {torch.cuda.device_count()} GPUs!")
         # Wrap the model with nn.DataParallel
         GMVAE_model = nn.DataParallel(GMVAE_model)
@@ -77,36 +79,38 @@ def train_model_BulkEncoder(max_epochs,
                             model_param_tuple,
                             device='cuda',
                             train_more=False,
-                            base_dir='saved_files/'):
+                            base_dir='saved_files/',
+                            load_pretrained=False):
+    
     # Check if pre-trained weights are available.
     assert base_dir is not None
     assert(isinstance(base_dir, str) or isinstance(base_dir, Path))
     if isinstance(base_dir, Path):
         base_dir = base_dir.as_posix()
 
-    if os.path.exists(base_dir + 'bulkEncoder_model.pt'):
+    if load_pretrained and os.path.exists(base_dir + 'bulkEncoder_model.pt'):
         if train_more:
             print(f"Pre-trained bulkEncoder_model EXIST. Additionally training for {max_epochs} epochs.")
         else:
             print("Pre-trained bulkEncoder_model EXIST. Skipping training.")
             return 0
     else:
-        print(f"Pre-trained bulkEncoder_model DOES NOT exist. Training for {max_epochs} epochs.")
+        print(f"Pre-trained bulkEncoder_model DOES NOT exist (or load_pretrained=False). Training for {max_epochs} epochs.")
 
     from models import GaussianMixtureVAE, bulkEncoder
     from train_bulkEncoder import train_BulkEncoder
 
     print("Loading scMus, scLogVars, and scPis from ", base_dir)
-    scMus = torch.load(base_dir + 'GMVAE_mus.pt').to(device).detach().requires_grad_(False)
+    scMus = torch.load(base_dir + '/GMVAE_mus.pt').to(device).detach().requires_grad_(False)
     assert torch.any(scMus != 0), "scMus contains only zeros"
-    scLogVars = torch.load(base_dir + 'GMVAE_logvars.pt').to(device).detach().requires_grad_(False)
+    scLogVars = torch.load(base_dir + '/GMVAE_logvars.pt').to(device).detach().requires_grad_(False)
     assert torch.any(scLogVars != 0), "scLogVars contains only zeros"
-    scPis = torch.load(base_dir + 'GMVAE_pis.pt').to(device).detach().requires_grad_(False)
+    scPis = torch.load(base_dir + '/GMVAE_pis.pt').to(device).detach().requires_grad_(False)
     assert scPis.max() > 0, "scPis contains only zeros"
     assert scPis.min() >= 0, "scPis contains negative values"
     input_dim, hidden_dim, latent_dim, K = model_param_tuple
 
-    print("Initializing bulkEncoder model...")
+    print(colored("Initializing bulkEncoder model...", "yellow"))
     bulkEncoder_model = bulkEncoder(input_dim, hidden_dim, latent_dim, K)
     
     if os.path.exists(base_dir + 'bulkEncoder_model.pt'):
@@ -127,7 +131,7 @@ def train_model_BulkEncoder(max_epochs,
     GMVAE_model = nn.DataParallel(GMVAE_model)
 
     # Load the state dict (assuming it was saved from a model wrapped with nn.DataParallel)
-    gmvae_state_dict = torch.load(base_dir + 'GMVAE_model.pt')
+    gmvae_state_dict = torch.load(base_dir + '/GMVAE_model.pt')
     GMVAE_model.load_state_dict(gmvae_state_dict, strict=True)
 
     bulkEncoder_model = bulkEncoder_model.to(device)
