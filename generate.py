@@ -7,11 +7,13 @@ def generate_(encoder, GMVAE_model, dataloader, device='cuda'):
     generated_list = []
     labels_list = []
     # Generate one cell per batch.
-    for _, (data, labels) in enumerate(dataloader):
+    for i, (data, labels) in enumerate(dataloader):
+        print(f"Sample # {i+1}")
         data = data.to(device)
 
+        # Create a vector of summed gene expressions per batch
         bulk_data = data.sum(dim=0)
-        bulk_data = bulk_data.unsqueeze(0)
+        bulk_data = bulk_data.unsqueeze(0) 
 
         # Forward pass
         mus, logvars, pis = encoder(bulk_data)
@@ -20,7 +22,7 @@ def generate_(encoder, GMVAE_model, dataloader, device='cuda'):
         pis = pis.squeeze()
 
         generated, k = GMVAE_model.module.decode_bulk(mus, logvars, pis)
-        
+        print("Generated cell type: ", k.item())
         generated_list.append(generated)
         labels_list.append(k.item())
     
@@ -29,7 +31,7 @@ def generate_(encoder, GMVAE_model, dataloader, device='cuda'):
     return generated_tensor, labels_list
 
 
-def generate(encoder, GMVAE_model, dataloader, num_cells, mapping_dict, color_map, device='cuda'):
+def generate(encoder, GMVAE_model, dataloader, num_cells, mapping_dict, color_map, device='cuda', base_dir=''):
     encoder.eval()
     GMVAE_model.eval()
     encoder = encoder.to(device)
@@ -43,6 +45,7 @@ def generate(encoder, GMVAE_model, dataloader, num_cells, mapping_dict, color_ma
     for i in range(num_cells):
         if (i + 1) % 100 == 0:
             print(f"Generating {i + 1}th cell...")
+        
         gt, label = generate_(encoder, GMVAE_model, dataloader, device=device)
         
         # Append gt to generated_aggregate without changing its type
@@ -50,8 +53,8 @@ def generate(encoder, GMVAE_model, dataloader, num_cells, mapping_dict, color_ma
         for l in label:
             sampled_celltypes.append(l)
         
-        if (i + 1) % 500 == 0:
-            # Process and save the data every 100 iterations
+        if (i + 1) % 200 == 0:
+            # Process and save the data every 200 iterations
 
             # Convert the list of tensors to a single tensor
             generated_aggregate_tensor = torch.stack(generated_aggregate)
@@ -66,18 +69,19 @@ def generate(encoder, GMVAE_model, dataloader, num_cells, mapping_dict, color_ma
             generated_aggregate_tensor = generated_aggregate_tensor.reshape(-1, input_dim)
             
             # Save tensors
-            torch.save(generated_aggregate_tensor, f"saved_files/generated_aggregate_tensor.pt")
-            torch.save(sampled_celltypes_tensor, f"saved_files/sampled_celltypes.pt")
+            torch.save(generated_aggregate_tensor, f"{base_dir}/generated_aggregate_tensor.pt")
+            torch.save(sampled_celltypes_tensor, f"{base_dir}/sampled_celltypes.pt")
             
             print(f"{i + 1}th generated_aggregate_tensor saved.")
 
 
-    generated_aggregate_tensor = torch.load("saved_files/generated_aggregate_tensor.pt")
-    sampled_celltypes = torch.load("saved_files/sampled_celltypes.pt")
+    generated_aggregate_tensor = torch.load(f"{base_dir}/generated_aggregate_tensor.pt")
+    sampled_celltypes = torch.load(f"{base_dir}/sampled_celltypes.pt")
     sampled_celltypes = torch.LongTensor(sampled_celltypes)
     
     print("Generated cell type proportion:")
     print(np.unique(sampled_celltypes, return_counts=True)[0])
     print(np.unique(sampled_celltypes, return_counts=True)[1]/len(sampled_celltypes))
+    return generated_aggregate_tensor, sampled_celltypes
 
 

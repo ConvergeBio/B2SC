@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 class GaussianMixtureVAE(nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_components):
+        print("Initializing GaussianMixtureVAE with input_dim:", input_dim, "hidden_dim:", hidden_dim, "latent_dim:", latent_dim, "n_components:", n_components)
         super(GaussianMixtureVAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -94,9 +95,9 @@ class GaussianMixtureVAE(nn.Module):
 
 
     def forward(self, x, labels):
-        mus, logvars, pis = self.encode(x.view(-1, self.input_dim))
-        zs = self.reparameterize_with_labels(mus, logvars, labels)
-        reconstructed = self.decode(zs)
+        mus, logvars, pis = self.encode(x.view(-1, self.input_dim)) # Take a batch of cells and encode them into mus, logvars, and pis
+        zs = self.reparameterize_with_labels(mus, logvars, labels) # The zs represent the simulated cells representations as captured with the current mus, and logvars.
+        reconstructed = self.decode(zs) # Decode the cells into the gene expression space.
         return reconstructed, mus, logvars, pis, zs
 
 

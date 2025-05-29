@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from utils import configure
 import os
+from pathlib import Path
+from termcolor import colored
 
 # Train GMVAE. Refer to train_GMVAE.py for the implementation and model checkpoint path.
 def train_model_GMVAE(max_epochs,
@@ -10,36 +12,55 @@ def train_model_GMVAE(max_epochs,
                       mapping_dict,
                       color_map,
                       model_param_tuple,
-                      device='cuda'):
+                      device='cuda',
+                      learning_rate=1e-3,
+                      base_dir='saved_files/',
+                      load_pretrained=False):
 
     # Check if pre-trained weights are available.
-    if os.path.exists('saved_files/GMVAE_mus.pt') and os.path.exists('saved_files/GMVAE_logvars.pt') and os.path.exists('saved_files/GMVAE_pis.pt'):
-        print("Pre-trained GMVAE_mus and GMVAE_logvars EXIST. Skipping training.")
+    assert base_dir is not None
+    assert(isinstance(base_dir, str) or isinstance(base_dir, Path))
+    if isinstance(base_dir, Path):
+        base_dir = base_dir.as_posix()
+    
+    GMVAE_mus_cpt_path = base_dir + "/GMVAE_mus.pt"
+    GMVAE_logvars_cpt_path = base_dir + "/GMVAE_logvars.pt"
+    GMVAE_pis_cpt_path = base_dir + "/GMVAE_pis.pt"
+    GMVAE_model_cpt_path = base_dir + "/GMVAE_model.pt"
+    if load_pretrained and os.path.exists(GMVAE_mus_cpt_path) and os.path.exists(GMVAE_logvars_cpt_path) and os.path.exists(GMVAE_pis_cpt_path):
+        print(colored(f"Pre-trained GMVAE_mus and GMVAE_logvars EXIST at {base_dir}. Skipping training.", "green"))
         return 0
     else:
-        print(f"Pre-trained GMVAE_mus and GMVAE_logvars DO NOT EXIST. Training for {max_epochs} epochs.")
+        print(colored(f"Pre-trained GMVAE_mus, GMVAE_logvars, and GMVAE_pis DO NOT EXIST at {base_dir} or load_pretrained=False.\nTraining for {max_epochs} epochs.", "yellow"))
 
         from models import GaussianMixtureVAE
         from train_GMVAE import train_GMVAE
 
         input_dim, hidden_dim, latent_dim, K = model_param_tuple
         GMVAE_model = GaussianMixtureVAE(input_dim, hidden_dim, latent_dim, K)
-        optimizer = torch.optim.Adam(GMVAE_model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(GMVAE_model.parameters(), lr=learning_rate)
         print(f"Using {torch.cuda.device_count()} GPUs!")
         # Wrap the model with nn.DataParallel
         GMVAE_model = nn.DataParallel(GMVAE_model)
-        try:
-            # Load the state dict (assuming it was saved from a model wrapped with nn.DataParallel)
-            gmvae_state_dict = torch.load("saved_files/GMVAE_model.pt")
-            GMVAE_model.load_state_dict(gmvae_state_dict, strict=True)
-            print("Loaded existing GMVAE_model.pt")
-        except:
-            # Initialize weights.
+        if not load_pretrained:
             for m in GMVAE_model.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.xavier_normal_(m.weight)
                     nn.init.zeros_(m.bias)
             print("Initialized GMVAE_model")
+        else:
+            try:
+                # Load the state dict (assuming it was saved from a model wrapped with nn.DataParallel)
+                gmvae_state_dict = torch.load(base_dir + 'GMVAE_model.pt')
+                GMVAE_model.load_state_dict(gmvae_state_dict, strict=True)
+                print("Loaded existing GMVAE_model.pt")
+            except:
+                # Initialize weights.
+                for m in GMVAE_model.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.xavier_normal_(m.weight)
+                        nn.init.zeros_(m.bias)
+                print("Initialized GMVAE_model")
 
 
         kl_weight = 0.0
@@ -48,13 +69,13 @@ def train_model_GMVAE(max_epochs,
         
         for epoch in range(0, max_epochs):
             print(f"Epoch {epoch} out of {max_epochs}")
-            kl_weight_increment = kl_weight_max / (100000)
+            kl_weight_increment = kl_weight_max / int((max_epochs * 1.2))
             
             if kl_weight < kl_weight_max:
                 kl_weight += kl_weight_increment
                 kl_weight = min(kl_weight, kl_weight_max)
             # Train model.
-            total_loss = train_GMVAE(GMVAE_model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, device)
+            total_loss = train_GMVAE(GMVAE_model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, device=device, base_dir=base_dir)
             losses.append(total_loss)
  
 
@@ -64,31 +85,52 @@ def train_model_BulkEncoder(max_epochs,
                             dataloader,
                             model_param_tuple,
                             device='cuda',
-                            train_more=False):
+                            train_more=False,
+                            base_dir='saved_files/',
+                            load_pretrained=False):
+    
     # Check if pre-trained weights are available.
-    if os.path.exists('saved_files/bulkEncoder_model.pt'):
+    assert base_dir is not None
+    assert(isinstance(base_dir, str) or isinstance(base_dir, Path))
+    if isinstance(base_dir, Path):
+        base_dir = base_dir.as_posix()
+
+    if load_pretrained and os.path.exists(base_dir + '/bulkEncoder_model.pt'):
         if train_more:
             print(f"Pre-trained bulkEncoder_model EXIST. Additionally training for {max_epochs} epochs.")
         else:
             print("Pre-trained bulkEncoder_model EXIST. Skipping training.")
             return 0
     else:
-        print(f"Pre-trained bulkEncoder_model DOES NOT exist. Training for {max_epochs} epochs.")
+        print(f"Pre-trained bulkEncoder_model DOES NOT exist (or load_pretrained=False). Training for {max_epochs} epochs.")
 
     from models import GaussianMixtureVAE, bulkEncoder
     from train_bulkEncoder import train_BulkEncoder
 
-    scMus = torch.load('/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_mus.pt').to(device).detach().requires_grad_(False)
-    scLogVars = torch.load('/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_logvars.pt').to(device).detach().requires_grad_(False)
-    scPis = torch.load('/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_pis.pt').to(device).detach().requires_grad_(False)
+    print("Loading scMus, scLogVars, and scPis from ", base_dir)
+    scMus = torch.load(base_dir + '/GMVAE_mus.pt').to(device).detach().requires_grad_(False) # embedding matrix of cell_type X latent_dim
+    assert torch.any(scMus != 0), "scMus contains only zeros"
+    scLogVars = torch.load(base_dir + '/GMVAE_logvars.pt').to(device).detach().requires_grad_(False) # embedding matrix of cell_type X latent_dim
+    assert torch.any(scLogVars != 0), "scLogVars contains only zeros"
+    scPis = torch.load(base_dir + '/GMVAE_pis.pt').to(device).detach().requires_grad_(False) # embedding matrix of cell_type X 1
+    sorted_x, _ = torch.sort(scPis)
+    max_val = sorted_x[-1]
+    second_max = sorted_x[-2] # 2nd largest value
 
+    if max_val >= 1000 * second_max:
+        print(colored("Warning: Max value is ≥1000x larger than the second-largest value.", "red"))
+    
+    assert scPis.max() > 0, "scPis contains only zeros"
+    assert scPis.min() >= 0, "scPis contains negative values"
     input_dim, hidden_dim, latent_dim, K = model_param_tuple
 
+    print(colored("Initializing bulkEncoder model...", "yellow"))
     bulkEncoder_model = bulkEncoder(input_dim, hidden_dim, latent_dim, K)
     
-    if os.path.exists('/home/shared-ssh-key/B2SC/saved_files/adamson_small/bulkEncoder_model.pt'):
-        encoder_state_dict = torch.load( "/home/shared-ssh-key/B2SC/saved_files/adamson_small/bulkEncoder_model.pt")
+    if os.path.exists(base_dir + 'bulkEncoder_model.pt'):
+        encoder_state_dict = torch.load(base_dir + 'bulkEncoder_model.pt')
         bulkEncoder_model.load_state_dict(encoder_state_dict, strict=True)
+        print("Loaded existing bulkEncoder_model.pt")
     else:
         # Initialize weights.
         for m in bulkEncoder_model.modules():
@@ -103,7 +145,7 @@ def train_model_BulkEncoder(max_epochs,
     GMVAE_model = nn.DataParallel(GMVAE_model)
 
     # Load the state dict (assuming it was saved from a model wrapped with nn.DataParallel)
-    gmvae_state_dict = torch.load("/home/shared-ssh-key/B2SC/saved_files/adamson_small/GMVAE_model.pt")
+    gmvae_state_dict = torch.load(base_dir + '/GMVAE_model.pt')
     GMVAE_model.load_state_dict(gmvae_state_dict, strict=True)
 
     bulkEncoder_model = bulkEncoder_model.to(device)
@@ -119,7 +161,8 @@ def train_model_BulkEncoder(max_epochs,
                             scMus,
                             scLogVars,
                             scPis,
-                            device)
+                            device,
+                            base_dir)
 
 
 # if __name__=="__main__":

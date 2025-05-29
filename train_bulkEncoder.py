@@ -1,8 +1,8 @@
 import torch
 import torch.nn.functional as F
+from termcolor import colored
 
-
-def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataloader, scMus, scLogVars, scPis, device='cuda'):
+def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataloader, scMus, scLogVars, scPis, device='cuda', base_dir='saved_files/'):
 
     model.train()
     model = model.to(device)
@@ -35,6 +35,7 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        print(colored(f"Loss: {loss.item():.4f}", 'magenta'))
 
     if (epoch+1)%1==0:
         print("Epoch[{}/{}]: mus_loss:{:.3f}, vars_loss:{:.3f}, pis_loss:{:.3f}".format(epoch+1,
@@ -44,9 +45,11 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
                                                                                         # h0_loss.item(),
                                                                                         pis_loss.item()))
 
-    if (epoch+1) % 500== 0:
-        torch.save(model.state_dict(), "saved_files/bulkEncoder_model.pt")
+    if (epoch+1) % 5== 0 and epoch != max_epochs - 1:
+        print(colored(f"Saving an intermediate checkpoint of bulkEncoder model to {base_dir}...", "yellow"))
+        torch.save(model.state_dict(), base_dir + '/bulkEncoder_model.pt')
     
-    print("Saving bulkEncoder model...")
-    torch.save(model.state_dict(), "/home/shared-ssh-key/B2SC/saved_files/adamson_small/bulkEncoder_model.pt")
+    if epoch == max_epochs - 1:
+        print(colored("Saving last checkpoint of bulkEncoder model...", "yellow"))
+        torch.save(model.state_dict(), base_dir + '/bulkEncoder_model.pt')
 
