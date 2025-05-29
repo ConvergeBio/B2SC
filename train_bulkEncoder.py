@@ -45,10 +45,11 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
                                                                                         # h0_loss.item(),
                                                                                         pis_loss.item()))
 
-    if (epoch+1) % 50== 0:
-        print(colored(f"Saving a checkpoint of bulkEncoder model to {base_dir}...", "yellow"))
+    if (epoch+1) % 5== 0 and epoch != max_epochs - 1:
+        print(colored(f"Saving an intermediate checkpoint of bulkEncoder model to {base_dir}...", "yellow"))
         torch.save(model.state_dict(), base_dir + '/bulkEncoder_model.pt')
     
-    print(colored("Saving bulkEncoder model...", "yellow"))
-    torch.save(model.state_dict(), base_dir + '/bulkEncoder_model.pt')
+    if epoch == max_epochs - 1:
+        print(colored("Saving last checkpoint of bulkEncoder model...", "yellow"))
+        torch.save(model.state_dict(), base_dir + '/bulkEncoder_model.pt')
 

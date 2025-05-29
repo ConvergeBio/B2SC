@@ -23,10 +23,10 @@ def train_model_GMVAE(max_epochs,
     if isinstance(base_dir, Path):
         base_dir = base_dir.as_posix()
     
-    GMVAE_mus_cpt_path = base_dir + "/models/GMVAE_mus.pt"
-    GMVAE_logvars_cpt_path = base_dir + "/models/GMVAE_logvars.pt"
-    GMVAE_pis_cpt_path = base_dir + "/models/GMVAE_pis.pt"
-    GMVAE_model_cpt_path = base_dir + "/models/GMVAE_model.pt"
+    GMVAE_mus_cpt_path = base_dir + "/GMVAE_mus.pt"
+    GMVAE_logvars_cpt_path = base_dir + "/GMVAE_logvars.pt"
+    GMVAE_pis_cpt_path = base_dir + "/GMVAE_pis.pt"
+    GMVAE_model_cpt_path = base_dir + "/GMVAE_model.pt"
     if load_pretrained and os.path.exists(GMVAE_mus_cpt_path) and os.path.exists(GMVAE_logvars_cpt_path) and os.path.exists(GMVAE_pis_cpt_path):
         print(colored(f"Pre-trained GMVAE_mus and GMVAE_logvars EXIST at {base_dir}. Skipping training.", "green"))
         return 0
@@ -42,18 +42,25 @@ def train_model_GMVAE(max_epochs,
         print(f"Using {torch.cuda.device_count()} GPUs!")
         # Wrap the model with nn.DataParallel
         GMVAE_model = nn.DataParallel(GMVAE_model)
-        try:
-            # Load the state dict (assuming it was saved from a model wrapped with nn.DataParallel)
-            gmvae_state_dict = torch.load(base_dir + 'GMVAE_model.pt')
-            GMVAE_model.load_state_dict(gmvae_state_dict, strict=True)
-            print("Loaded existing GMVAE_model.pt")
-        except:
-            # Initialize weights.
+        if not load_pretrained:
             for m in GMVAE_model.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.xavier_normal_(m.weight)
                     nn.init.zeros_(m.bias)
             print("Initialized GMVAE_model")
+        else:
+            try:
+                # Load the state dict (assuming it was saved from a model wrapped with nn.DataParallel)
+                gmvae_state_dict = torch.load(base_dir + 'GMVAE_model.pt')
+                GMVAE_model.load_state_dict(gmvae_state_dict, strict=True)
+                print("Loaded existing GMVAE_model.pt")
+            except:
+                # Initialize weights.
+                for m in GMVAE_model.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.xavier_normal_(m.weight)
+                        nn.init.zeros_(m.bias)
+                print("Initialized GMVAE_model")
 
 
         kl_weight = 0.0
@@ -62,7 +69,7 @@ def train_model_GMVAE(max_epochs,
         
         for epoch in range(0, max_epochs):
             print(f"Epoch {epoch} out of {max_epochs}")
-            kl_weight_increment = kl_weight_max / (1000)
+            kl_weight_increment = kl_weight_max / int((max_epochs * 1.2))
             
             if kl_weight < kl_weight_max:
                 kl_weight += kl_weight_increment
@@ -88,7 +95,7 @@ def train_model_BulkEncoder(max_epochs,
     if isinstance(base_dir, Path):
         base_dir = base_dir.as_posix()
 
-    if load_pretrained and os.path.exists(base_dir + 'bulkEncoder_model.pt'):
+    if load_pretrained and os.path.exists(base_dir + '/bulkEncoder_model.pt'):
         if train_more:
             print(f"Pre-trained bulkEncoder_model EXIST. Additionally training for {max_epochs} epochs.")
         else:
@@ -101,11 +108,18 @@ def train_model_BulkEncoder(max_epochs,
     from train_bulkEncoder import train_BulkEncoder
 
     print("Loading scMus, scLogVars, and scPis from ", base_dir)
-    scMus = torch.load(base_dir + '/GMVAE_mus.pt').to(device).detach().requires_grad_(False)
+    scMus = torch.load(base_dir + '/GMVAE_mus.pt').to(device).detach().requires_grad_(False) # embedding matrix of cell_type X latent_dim
     assert torch.any(scMus != 0), "scMus contains only zeros"
-    scLogVars = torch.load(base_dir + '/GMVAE_logvars.pt').to(device).detach().requires_grad_(False)
+    scLogVars = torch.load(base_dir + '/GMVAE_logvars.pt').to(device).detach().requires_grad_(False) # embedding matrix of cell_type X latent_dim
     assert torch.any(scLogVars != 0), "scLogVars contains only zeros"
-    scPis = torch.load(base_dir + '/GMVAE_pis.pt').to(device).detach().requires_grad_(False)
+    scPis = torch.load(base_dir + '/GMVAE_pis.pt').to(device).detach().requires_grad_(False) # embedding matrix of cell_type X 1
+    sorted_x, _ = torch.sort(scPis)
+    max_val = sorted_x[-1]
+    second_max = sorted_x[-2] # 2nd largest value
+
+    if max_val >= 1000 * second_max:
+        print(colored("Warning: Max value is ≥1000x larger than the second-largest value.", "red"))
+    
     assert scPis.max() > 0, "scPis contains only zeros"
     assert scPis.min() >= 0, "scPis contains negative values"
     input_dim, hidden_dim, latent_dim, K = model_param_tuple

@@ -61,11 +61,11 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
 
         zinb_loss_val = zinb_loss(data, reconstructed, model.module.prob_extra_zero, model.module.over_disp)
 
-        loss_kl = 0.5 * torch.sum(-1 - logvars + mus.pow(2) + logvars.exp())/1e10
-        loss_kl = loss_kl * kl_weight
-        loss_kl = 1 if loss_kl > 1 else loss_kl
+        loss_kl = (0.5 * torch.sum(-1 - logvars + mus.pow(2) + logvars.exp())/1e9)
+        loss_kl_weighted = loss_kl * kl_weight
+        loss_kl_weighted = 1 if loss_kl_weighted > 1 else loss_kl_weighted
         
-        loss = loss_recon +  zinb_loss_val + fraction_loss + loss_kl
+        loss = loss_recon +  zinb_loss_val + (fraction_loss*5) + loss_kl_weighted
         loss.backward()
 
         # for name, param in model.named_parameters():
@@ -77,9 +77,13 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         print(colored(f"Loss: {loss.item():.4f}", 'magenta'))
         total_loss += loss.item()
     
+    print(colored(f"fraction_loss: {fraction_loss:.4f}", 'cyan'))
+    print(colored(f"loss_kl  unweighted: {loss_kl:.4f}", 'blue'))
+    print(colored(f"loss_kl  weighted: {loss_kl_weighted:.4f}", 'blue'))
+    print(colored(f"kl_weight: {kl_weight:.4f}", 'blue'))
     print("Epoch finished")
 
-    if ((epoch+1) % 5 == 0) and (epoch != max_epochs - 1):
+    if ((epoch+1) % 10 == 0) and (epoch != max_epochs - 1):
         print("Saving intermediate results to folder:", base_dir)
         print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f}\n Recon Loss: {loss_recon:.4f}\n Total Loss: {total_loss:.4f}\n Fraction Loss: {fraction_loss:.4f}\n ZINB Loss: {zinb_loss_val:.4f}')
 
@@ -147,7 +151,7 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
             plt.close()
 
     elif epoch == max_epochs - 1:
-        print("Saving final results to folder:", base_dir)
+        print(colored(f"Saving final results to folder: {base_dir}", 'green'))
         
 
         print(f'Epoch: {epoch+1} KL Loss: {loss_kl:.4f}\n Recon Loss: {loss_recon:.4f}\n Total Loss: {total_loss:.4f}\n Fraction Loss: {fraction_loss:.4f}\n ZINB Loss: {zinb_loss_val:.4f}')

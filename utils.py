@@ -130,7 +130,7 @@ def encode_labels(labels: pd.Series) -> (torch.LongTensor, dict):
 
 def split_and_package(X: np.ndarray, labels: torch.LongTensor,
                       train_frac: float=1.0, seed: int=0):
-    """Random train-only split, return TensorDataset + raw arrays."""
+    """Random train-only split, return shuffled TensorDataset + raw arrays."""
     torch.manual_seed(seed)
     n = X.shape[0]
     idx = torch.randperm(n)
@@ -146,11 +146,16 @@ def load_data(
     barcode_path: str = None,
     generate_pseudo_cells: bool = False,
     n_clusters: int = 5,
-    train_frac: float = 0.8, 
+    train_frac: float = 1.0, 
+    test_samples: list[str] = [],
     normalize_data : bool = True
 ):
     # 1) I/O
     adata = read_adata(data_dir)
+    if test_samples:
+        # Exclude test samples from training data
+        adata = adata[~adata.obs.donor_id.isin(test_samples)]
+
     if normalize_data:
         print("Normalizing data...")
         sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
@@ -163,14 +168,16 @@ def load_data(
         if 'cell_type' not in adata.obs.columns and barcode_path is None:
             raise ValueError("barcode_path is required unless generate_pseudo_cells=True")
         elif 'cell_type' in adata.obs.columns:
-            adata.obs["labels"] = adata.obs["cell_type"]
+            adata.obs["labels"] = adata.obs["cell_type"].cat.remove_unused_categories()
         else:
             adata = label_from_csv(adata, barcode_path)
 
     # Force categorical dtype (keeps ordering stable)
 
     adata.obs["labels"] = adata.obs["labels"].astype("category")
-
+    assert(len(adata.obs.labels.cat.categories) == len(np.unique(adata.obs.labels))) # ensure that the number of categories is the same as the number of unique labels
+    normalized_cell_type_counts = adata.obs.labels.value_counts(normalize=True)[adata.obs.labels.value_counts() > 0]
+    print("Cell types: ", normalized_cell_type_counts)
     # 3) Encoding
     labels_tensor, mapping_dict = encode_labels(adata.obs["labels"])
     # turn sparse → dense
@@ -179,7 +186,7 @@ def load_data(
 
     # 4) Split & package
     dataset, X_train, y_train = split_and_package(X, labels_tensor, train_frac)
-
+    assert(len(normalized_cell_type_counts) == len(np.unique(labels_tensor)))
     # compute cell-type (or pseudo-type) fractions on full data
     counts = adata.obs["labels"].value_counts().sort_index()
     cell_type_fractions = counts.values / counts.values.sum()
@@ -196,11 +203,12 @@ def get_saved_GMM_params(mus_path, vars_path):
     return gmm_mus_celltypes, gmm_vars_celltypes
 
 
-def configure(data_dir, barcode_path, generate_pseudo_cells=False):
+def configure(data_dir, barcode_path, generate_pseudo_cells=False, test_samples=None):
     dataset, X_tensor, cell_types_tensor, cell_type_fractions, mapping_dict, gene_list = load_data(
                                                                                         data_dir=data_dir,
                                                                                         barcode_path=barcode_path,
-                                                                                        generate_pseudo_cells=generate_pseudo_cells
+                                                                                        generate_pseudo_cells=generate_pseudo_cells,
+                                                                                        test_samples=test_samples
                                                                                         )
     assert(len(dataset) > 0)
     assert(len(dataset) == X_tensor.shape[0])
@@ -220,11 +228,11 @@ def configure(data_dir, barcode_path, generate_pseudo_cells=False):
     
     args = parser.parse_args()
     args.num_cells = num_cells
-    args.learning_rate = 1e-3
+    args.learning_rate = 5e-4
     args.hidden_dim = 600
     args.latent_dim = 300
-    args.train_GMVAE_epochs = 1
-    args.bulk_encoder_epochs = 1
+    args.train_GMVAE_epochs = 40
+    args.bulk_encoder_epochs = 20
     # args.dropout = 0.05
     args.batch_size = num_cells//5
     args.input_dim = num_genes
@@ -246,6 +254,7 @@ def configure(data_dir, barcode_path, generate_pseudo_cells=False):
     cell_type_to_fraction = {cell_type: cell_type_fractions[cell_type] for cell_type in args.unique_cell_types}
 
     args.color_map = get_colormap_liver()
+    assert(len(args.color_map) == len(args.unique_cell_types))
     # args.K = 34 # number of cell types
 
     
@@ -344,7 +353,11 @@ def make_pseudo_bulk_adata(
 
     return bulk_adata
 
-def load_bulk_data_h5ad(bulk_h5ad_path, gene_list, batch_size=None):
+def load_bulk_data_h5ad(bulk_h5ad_path, 
+                        gene_list,
+                        normalize_data = True,
+                        batch_size=None,
+                        include_sample_id : list[str]= None):
     """
     Reads a bulk AnnData (.h5ad), aligns to gene_list,
     and returns a DataLoader of shape [n_samples, n_genes].
@@ -355,6 +368,15 @@ def load_bulk_data_h5ad(bulk_h5ad_path, gene_list, batch_size=None):
     """
     # 1) Load the AnnData
     adata_bulk = sc.read_h5ad(bulk_h5ad_path)
+    if include_sample_id is not None:
+        assert(isinstance(include_sample_id, list))
+        adata_bulk = adata_bulk[adata_bulk.obs.index.isin(include_sample_id)]
+        assert(len(adata_bulk) == len(include_sample_id))
+        print(f"Loaded {len(adata_bulk)} samples from {bulk_h5ad_path}")
+    if normalize_data:
+        print("Normalizing sample bulk data ...")
+        sc.pp.normalize_total(adata_bulk, target_sum=1e4, inplace=True)
+        sc.pp.log1p(adata_bulk)
     
     # 2) Extract counts matrix (dense)
     X = adata_bulk.X

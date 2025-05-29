@@ -95,9 +95,9 @@ class GaussianMixtureVAE(nn.Module):
 
 
     def forward(self, x, labels):
-        mus, logvars, pis = self.encode(x.view(-1, self.input_dim))
-        zs = self.reparameterize_with_labels(mus, logvars, labels)
-        reconstructed = self.decode(zs)
+        mus, logvars, pis = self.encode(x.view(-1, self.input_dim)) # Take a batch of cells and encode them into mus, logvars, and pis
+        zs = self.reparameterize_with_labels(mus, logvars, labels) # The zs represent the simulated cells representations as captured with the current mus, and logvars.
+        reconstructed = self.decode(zs) # Decode the cells into the gene expression space.
         return reconstructed, mus, logvars, pis, zs
 
 
