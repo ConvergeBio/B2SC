@@ -271,6 +271,7 @@ def configure(data_dir, barcode_path, generate_pseudo_cells=False, test_samples=
     # args.dropout = 0.05
     args.batch_size = num_cells//20
     args.input_dim = num_genes
+    args.gammas = {"recon": 1, "zinb": 1, "fraction": 5, "kl": 1}
     print(f"Batch size: {args.batch_size}")
     
     gmvae_dataloader = DataLoader(gmvae_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)

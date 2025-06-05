@@ -35,6 +35,7 @@ if __name__ == "__main__":
         mapping_dict      = args.mapping_dict,
         color_map         = args.color_map,
         model_param_tuple = (args.input_dim, args.hidden_dim, args.latent_dim, len(args.cell_type_fractions)),
+        gammas            = args.gammas,
         device            = device,
         learning_rate     = args.learning_rate,
         load_pretrained   = False,

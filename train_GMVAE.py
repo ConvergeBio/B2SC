@@ -21,7 +21,7 @@ def zinb_loss(y_true, y_pred, pi, r, eps=1e-10):
     return -torch.mean(zero_case + nb_case)
 
 
-def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, device='cuda', base_dir=None, plot_umap=False):
+def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, gammas,device='cuda', base_dir=None, plot_umap=False):
     assert base_dir is not None
     assert(isinstance(base_dir, str) or isinstance(base_dir, Path))
     model.train()
@@ -65,7 +65,11 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         loss_kl_weighted = loss_kl * kl_weight
         loss_kl_weighted = 1 if loss_kl_weighted > 1 else loss_kl_weighted
         
-        loss = loss_recon*5 +  zinb_loss_val + (fraction_loss*10) + loss_kl_weighted
+        loss = loss_recon*gammas['recon'] + \
+               zinb_loss_val*gammas['zinb'] + \
+               fraction_loss*gammas['fraction'] + \
+               loss_kl_weighted*gammas['kl']
+        
         loss.backward()
 
         # for name, param in model.named_parameters():

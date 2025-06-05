@@ -12,6 +12,7 @@ def train_model_GMVAE(max_epochs,
                       mapping_dict,
                       color_map,
                       model_param_tuple,
+                      gammas,
                       device='cuda',
                       learning_rate=1e-3,
                       base_dir='saved_files/',
@@ -75,7 +76,7 @@ def train_model_GMVAE(max_epochs,
                 kl_weight += kl_weight_increment
                 kl_weight = min(kl_weight, kl_weight_max)
             # Train model.
-            total_loss = train_GMVAE(GMVAE_model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, device=device, base_dir=base_dir)
+            total_loss = train_GMVAE(GMVAE_model, epoch, dataloader, optimizer, proportion_tensor, kl_weight, mapping_dict, color_map, max_epochs, gammas, device=device, base_dir=base_dir)
             losses.append(total_loss)
  
 
