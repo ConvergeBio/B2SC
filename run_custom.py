@@ -2,7 +2,7 @@ import os
 import torch
 from utils import configure, load_bulk_data_h5ad
 from main import train_model_GMVAE, train_model_BulkEncoder
-from generate import generate  # or generate_bulk if you adapt it
+from generate import generate  
 from pathlib import Path
 
 if __name__ == "__main__":
@@ -24,41 +24,41 @@ if __name__ == "__main__":
         assert(os.path.exists(barcode_fp))
 
     generate_pseudo_cells = False
-    test_samples = ['1-M-62']
+    test_samples = []#['3_11_M', '3-M-8/9']
     args = configure(sc_dir, barcode_fp, generate_pseudo_cells=generate_pseudo_cells, test_samples=test_samples)
 
     # ── 2) Train GMVAE (on sc data)
     train_model_GMVAE(
         max_epochs        = args.train_GMVAE_epochs,
-        dataloader        = args.dataloader,
+        dataloader        = args.gmvae_dataloader,
         proportion_tensor = args.cell_type_fractions,
         mapping_dict      = args.mapping_dict,
         color_map         = args.color_map,
         model_param_tuple = (args.input_dim, args.hidden_dim, args.latent_dim, len(args.cell_type_fractions)),
         device            = device,
         learning_rate     = args.learning_rate,
-        load_pretrained   = True,
+        load_pretrained   = False,
         base_dir          = BASE_DIR
     )
 
     # ── 3) Train BulkEncoder (on sc data)
     train_model_BulkEncoder(
         max_epochs        = args.bulk_encoder_epochs,
-        dataloader        = args.dataloader,
+        dataloader        = args.be_dataloader,
         model_param_tuple = (args.input_dim, args.hidden_dim, args.latent_dim, len(args.cell_type_fractions)),
         device            = device,
         train_more        = False,
-        load_pretrained   = True,
+        load_pretrained   = False,
         base_dir          = BASE_DIR
     )
 
     # ── 4) Load your bulk counts & generate pseudo-single-cells
     #     
-    bulk_loader = load_bulk_data_h5ad(
+    bulk_loader, sample_ids = load_bulk_data_h5ad(
         bulk_h5ad_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_pseudobulk.h5ad",
         gene_list     = args.gene_list,
         batch_size    = 1,   # or set to e.g. 1 or N,
-        include_sample_id = test_samples
+        include_sample_id = ['3-M-8/9']#test_samples
     )
 
     # The existing `generate` in generate.py expects (bulkEncoder_model, GMVAE_model, loader, ...)
@@ -78,4 +78,4 @@ if __name__ == "__main__":
     be.load_state_dict(torch.load(BASE_DIR.as_posix() + "/bulkEncoder_model.pt"), strict=True)
 
     # Finally generate:
-    generated_aggregate_tensor, sampled_celltypes = generate(encoder=be, GMVAE_model=gmvae, dataloader=bulk_loader, num_cells=1000, mapping_dict=args.mapping_dict, color_map=args.color_map, device=device, base_dir=BASE_DIR)
+    generated_tensor_dict, sampled_celltypes = generate(encoder=be, GMVAE_model=gmvae, dataloader=bulk_loader, sample_ids=sample_ids, num_cells=500, mapping_dict=args.mapping_dict, color_map=args.color_map, device=device, base_dir=BASE_DIR)

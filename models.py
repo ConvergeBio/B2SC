@@ -129,7 +129,8 @@ class GaussianMixtureVAE(nn.Module):
 
 
 class bulkEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_components=10):
+    def __init__(self, input_dim=5000, hidden_dim=600, latent_dim=300, n_components=10):
+        print("Initializing bulkEncoder with input_dim:", input_dim, "hidden_dim:", hidden_dim, "latent_dim:", latent_dim, "n_components:", n_components)
         super(bulkEncoder, self).__init__()
         
         self.input_dim = input_dim

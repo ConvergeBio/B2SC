@@ -65,7 +65,7 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
         loss_kl_weighted = loss_kl * kl_weight
         loss_kl_weighted = 1 if loss_kl_weighted > 1 else loss_kl_weighted
         
-        loss = loss_recon +  zinb_loss_val + (fraction_loss*5) + loss_kl_weighted
+        loss = loss_recon*5 +  zinb_loss_val + (fraction_loss*10) + loss_kl_weighted
         loss.backward()
 
         # for name, param in model.named_parameters():
@@ -81,6 +81,7 @@ def train_GMVAE(model, epoch, dataloader, optimizer, proportion_tensor, kl_weigh
     print(colored(f"loss_kl  unweighted: {loss_kl:.4f}", 'blue'))
     print(colored(f"loss_kl  weighted: {loss_kl_weighted:.4f}", 'blue'))
     print(colored(f"kl_weight: {kl_weight:.4f}", 'blue'))
+    print(colored(f"loss_recon: {loss_recon:.4f}", 'blue'))
     print("Epoch finished")
 
     if ((epoch+1) % 10 == 0) and (epoch != max_epochs - 1):

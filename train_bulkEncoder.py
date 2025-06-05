@@ -15,6 +15,7 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
         # You can use scMu and scLogVar from GMVAE_model to train bulkEncoder_model or
         # run GMVAE_model on the data and use the output to train bulkEncoder_model.
         bulk_data = data.sum(dim=0)
+        print(f"Sum expression per sample: {bulk_data.sum()}")
         bulk_data = bulk_data.unsqueeze(0)
 
         mus, logvars, pis = model(bulk_data) # Predict mus (means), logvars (variances), pis (proportions)
@@ -30,12 +31,22 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
         assert(pis.shape == scPis.shape)
         pis_loss = F.mse_loss(pis, scPis)
 
-        loss = mus_loss + logvars_loss + pis_loss
+        C = pis.shape[0]
+        uniform = torch.full_like(pis, 1.0 / C)
+        uniform_penalty = F.cosine_similarity(pis.unsqueeze(0), uniform.unsqueeze(0)).squeeze()
+
+
+        loss = mus_loss + logvars_loss + (pis_loss*50) + (uniform_penalty*100)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         print(colored(f"Loss: {loss.item():.4f}", 'magenta'))
+
+    print(colored(f"Uniform penalty: {uniform_penalty}", 'cyan'))
+    print(colored(f"pis_loss: {pis_loss}", 'cyan'))
+    print(colored(f"mus_loss: {mus_loss}", 'cyan'))
+    print(colored(f"logvars_loss: {logvars_loss}", 'cyan'))
 
     if (epoch+1)%1==0:
         print("Epoch[{}/{}]: mus_loss:{:.3f}, vars_loss:{:.3f}, pis_loss:{:.3f}".format(epoch+1,
@@ -45,7 +56,7 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
                                                                                         # h0_loss.item(),
                                                                                         pis_loss.item()))
 
-    if (epoch+1) % 5== 0 and epoch != max_epochs - 1:
+    if (epoch+1) % 20== 0 and epoch != max_epochs - 1:
         print(colored(f"Saving an intermediate checkpoint of bulkEncoder model to {base_dir}...", "yellow"))
         torch.save(model.state_dict(), base_dir + '/bulkEncoder_model.pt')
     

@@ -2,7 +2,7 @@ import scanpy as sc
 import pandas as pd
 import torch
 import numpy as np
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, Dataset
 import argparse
 import anndata
 from termcolor import colored
@@ -12,6 +12,34 @@ from sklearn.cluster import KMeans
 np.random.seed(4)
 # Set torch seed.
 torch.manual_seed(4)
+
+class DonorGroupedDataset(Dataset):
+    def __init__(self, adata, donor_col: str = 'donor_id'):
+        self.adata = adata
+        self.donor_col = donor_col
+        # Unique donors
+        self.donor_ids = self.adata.obs[donor_col].unique().tolist()
+        # Group indices by donor
+        self.grouped_indices = {
+            donor: np.where(self.adata.obs[donor_col] == donor)[0]
+            for donor in self.donor_ids
+        }
+
+    def __len__(self):
+        return len(self.donor_ids)
+
+    def __getitem__(self, idx):
+        donor = self.donor_ids[idx]
+        indices = self.grouped_indices[donor]
+        # Sum across all rows for this donor
+        donor_matrix = self.adata.X[indices]
+        # If sparse, convert to dense
+        if not isinstance(donor_matrix, np.ndarray):
+            donor_matrix = donor_matrix.toarray()
+        summed = donor_matrix.sum(axis=0)
+        # Return torch tensor
+        return torch.tensor(summed, dtype=torch.float32), donor
+
 
 def get_colormap_liver():
     colormap_dict = {
@@ -152,15 +180,20 @@ def load_data(
 ):
     # 1) I/O
     adata = read_adata(data_dir)
+    orig_num_obs = len(adata)
     if test_samples:
         # Exclude test samples from training data
         adata = adata[~adata.obs.donor_id.isin(test_samples)]
+        new_num_obs = len(adata)
+        print(colored(f"Excluded {orig_num_obs - new_num_obs} samples from training data, which are {100 * (orig_num_obs - new_num_obs) / orig_num_obs}% of the original data", "yellow"))
 
     if normalize_data:
         print("Normalizing data...")
         sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
         sc.pp.log1p(adata)
 
+    print(f"Sum expression per cell: {adata.X.sum(axis=1)}")
+    print(f"Sum expression per cell: {adata.X.sum(axis=1).max()}")
     # 2) Labeling
     if generate_pseudo_cells:
         adata = label_by_clustering(adata, n_clusters=n_clusters)
@@ -185,15 +218,17 @@ def load_data(
     gene_list = adata.var_names.tolist()
 
     # 4) Split & package
-    dataset, X_train, y_train = split_and_package(X, labels_tensor, train_frac)
+    gmvae_dataset, X_train, y_train = split_and_package(X, labels_tensor, train_frac)
     assert(len(normalized_cell_type_counts) == len(np.unique(labels_tensor)))
     # compute cell-type (or pseudo-type) fractions on full data
     counts = adata.obs["labels"].value_counts().sort_index()
     cell_type_fractions = counts.values / counts.values.sum()
     # cell_type_fractions_non_zero = cell_type_fractions[cell_type_fractions > 0]
     # print(f"Cell type fractions: {cell_type_fractions_non_zero}")
+    be_dataset = DonorGroupedDataset(adata)
 
-    return dataset, X_train, y_train, cell_type_fractions, mapping_dict, gene_list
+
+    return gmvae_dataset, be_dataset, X_train, y_train, cell_type_fractions, mapping_dict, gene_list
 
 
 
@@ -204,14 +239,14 @@ def get_saved_GMM_params(mus_path, vars_path):
 
 
 def configure(data_dir, barcode_path, generate_pseudo_cells=False, test_samples=None):
-    dataset, X_tensor, cell_types_tensor, cell_type_fractions, mapping_dict, gene_list = load_data(
+    gmvae_dataset, be_dataset, X_tensor, cell_types_tensor, cell_type_fractions, mapping_dict, gene_list = load_data(
                                                                                         data_dir=data_dir,
                                                                                         barcode_path=barcode_path,
                                                                                         generate_pseudo_cells=generate_pseudo_cells,
                                                                                         test_samples=test_samples
                                                                                         )
-    assert(len(dataset) > 0)
-    assert(len(dataset) == X_tensor.shape[0])
+    assert(len(gmvae_dataset) > 0)
+    assert(len(gmvae_dataset) == X_tensor.shape[0])
     assert(len(np.unique(cell_types_tensor)) > 0)
 
     unique_cell_type_ids = np.unique(cell_types_tensor)
@@ -229,18 +264,20 @@ def configure(data_dir, barcode_path, generate_pseudo_cells=False, test_samples=
     args = parser.parse_args()
     args.num_cells = num_cells
     args.learning_rate = 5e-4
-    args.hidden_dim = 600
-    args.latent_dim = 300
-    args.train_GMVAE_epochs = 40
-    args.bulk_encoder_epochs = 20
+    args.hidden_dim = 2048
+    args.latent_dim = 1024
+    args.train_GMVAE_epochs = 30
+    args.bulk_encoder_epochs = 100
     # args.dropout = 0.05
-    args.batch_size = num_cells//5
+    args.batch_size = num_cells//20
     args.input_dim = num_genes
     print(f"Batch size: {args.batch_size}")
     
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    gmvae_dataloader = DataLoader(gmvae_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    be_dataloader = DataLoader(be_dataset, batch_size=3, shuffle=True, drop_last=False)
 
-    args.dataloader = dataloader
+    args.gmvae_dataloader = gmvae_dataloader
+    args.be_dataloader = be_dataloader
     args.cell_types_tensor = cell_types_tensor
 
     args.mapping_dict = mapping_dict
@@ -355,7 +392,7 @@ def make_pseudo_bulk_adata(
 
 def load_bulk_data_h5ad(bulk_h5ad_path, 
                         gene_list,
-                        normalize_data = True,
+                        normalize_data = False,
                         batch_size=None,
                         include_sample_id : list[str]= None):
     """
@@ -378,6 +415,10 @@ def load_bulk_data_h5ad(bulk_h5ad_path,
         sc.pp.normalize_total(adata_bulk, target_sum=1e4, inplace=True)
         sc.pp.log1p(adata_bulk)
     
+    else:
+        print("Not normalizing sample bulk data")
+
+    print(f"Sum expression per sample: {adata_bulk.X.sum(axis=1)}")
     # 2) Extract counts matrix (dense)
     X = adata_bulk.X
     if not isinstance(X, (np.ndarray, )):
@@ -401,4 +442,4 @@ def load_bulk_data_h5ad(bulk_h5ad_path,
     # 6) Wrap in a DataLoader
     ds = TensorDataset(data_tensor, labels)
     bs = batch_size or data_tensor.size(0)
-    return DataLoader(ds, batch_size=bs, shuffle=False)
+    return DataLoader(ds, batch_size=bs, shuffle=False), df.index.tolist()
