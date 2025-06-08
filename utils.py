@@ -263,15 +263,15 @@ def configure(data_dir, barcode_path, generate_pseudo_cells=False, test_samples=
     
     args = parser.parse_args()
     args.num_cells = num_cells
-    args.learning_rate = 5e-4
-    args.hidden_dim = 2048
-    args.latent_dim = 1024
-    args.train_GMVAE_epochs = 30
+    args.learning_rate = 1e-4
+    args.hidden_dim = 1024
+    args.latent_dim = 512
+    args.train_GMVAE_epochs = 20
     args.bulk_encoder_epochs = 100
     # args.dropout = 0.05
-    args.batch_size = num_cells//20
+    args.batch_size = num_cells//50
     args.input_dim = num_genes
-    args.gammas = {"recon": 1, "zinb": 1, "fraction": 5, "kl": 1}
+    args.gammas = {"recon": 2, "zinb": 1, "fraction": 10, "kl": 1}
     print(f"Batch size: {args.batch_size}")
     
     gmvae_dataloader = DataLoader(gmvae_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)

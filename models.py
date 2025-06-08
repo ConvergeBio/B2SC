@@ -24,8 +24,8 @@ class GaussianMixtureVAE(nn.Module):
         self.dropout = nn.Dropout(p=0.05)
 
         # Parameters for ZINB
-        self.prob_extra_zero = nn.Parameter(torch.rand(1))  # Initialize to a random value
-        self.over_disp = nn.Parameter(torch.rand(1))   # Initialize to a random value
+        self.prob_extra_zero = nn.Parameter(torch.rand(self.n_components))  # Initialize to a random value per component
+        self.over_disp = nn.Parameter(torch.rand(self.n_components))   # Initialize to a random value per component
 
         # Decoder
         self.fc3 = nn.Linear(latent_dim, hidden_dim//2)

@@ -16,7 +16,7 @@ if __name__ == "__main__":
     # ── 1) Configure using your sc reference
     # sc_dir     = (BASE_DIR / "convergeSC-Internal/bulk2single/data/SRX20558685.h5ad").as_posix()
     # sc_dir = (BASE_DIR / "convergeSC-Internal/bulk2single/data/mus_musculus_healthy_liver_SRX13549197.h5ad").as_posix()
-    sc_dir = (BASE_DIR / "mouse_liver_sc_healthy_5K_highly_variable.h5ad").as_posix()
+    sc_dir = (BASE_DIR / "mouse_liver_sc_healthy_5K_highly_variable_no_primary.h5ad").as_posix()
     # sc_dir = (BASE_DIR / "convergeSC-Internal/bulk2single/data/adamson_small_sc.h5ad").as_posix()
     assert(os.path.exists(sc_dir))
     # barcode_fp = "/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/adamson_small_barcode_2_celltype.csv"
@@ -24,7 +24,7 @@ if __name__ == "__main__":
         assert(os.path.exists(barcode_fp))
 
     generate_pseudo_cells = False
-    test_samples = []#['3_11_M', '3-M-8/9']
+    test_samples = ['3_11_M', '3-M-8/9']
     args = configure(sc_dir, barcode_fp, generate_pseudo_cells=generate_pseudo_cells, test_samples=test_samples)
 
     # ── 2) Train GMVAE (on sc data)
@@ -56,10 +56,10 @@ if __name__ == "__main__":
     # ── 4) Load your bulk counts & generate pseudo-single-cells
     #     
     bulk_loader, sample_ids = load_bulk_data_h5ad(
-        bulk_h5ad_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_pseudobulk.h5ad",
+        bulk_h5ad_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_no_primary_pseudobulk.h5ad",
         gene_list     = args.gene_list,
         batch_size    = 1,   # or set to e.g. 1 or N,
-        include_sample_id = ['3-M-8/9']#test_samples
+        include_sample_id = test_samples
     )
 
     # The existing `generate` in generate.py expects (bulkEncoder_model, GMVAE_model, loader, ...)

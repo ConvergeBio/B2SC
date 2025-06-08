@@ -9,13 +9,13 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
     GMVAE_model.eval()
     GMVAE_model = GMVAE_model.to(device)
 
-    for _, (data, _) in enumerate(dataloader):
+    for _, (data, labels) in enumerate(dataloader):
         data = data.to(device)
 
         # You can use scMu and scLogVar from GMVAE_model to train bulkEncoder_model or
         # run GMVAE_model on the data and use the output to train bulkEncoder_model.
         bulk_data = data.sum(dim=0)
-        print(f"Sum expression per sample: {bulk_data.sum()}")
+        # print(f"Sum expression per sample: {bulk_data.sum()}")
         bulk_data = bulk_data.unsqueeze(0)
 
         mus, logvars, pis = model(bulk_data) # Predict mus (means), logvars (variances), pis (proportions)
@@ -31,24 +31,23 @@ def train_BulkEncoder(epoch, model, GMVAE_model, max_epochs, optimizer, dataload
         assert(pis.shape == scPis.shape)
         pis_loss = F.mse_loss(pis, scPis)
 
-        C = pis.shape[0]
-        uniform = torch.full_like(pis, 1.0 / C)
-        uniform_penalty = F.cosine_similarity(pis.unsqueeze(0), uniform.unsqueeze(0)).squeeze()
+        # C = pis.shape[0]
+        # uniform = torch.full_like(pis, 1.0 / C)
+        # uniform_penalty = F.cosine_similarity(pis.unsqueeze(0), uniform.unsqueeze(0)).squeeze()
 
-
-        loss = mus_loss + logvars_loss + (pis_loss*50) + (uniform_penalty*100)
+        loss = mus_loss + logvars_loss + (pis_loss * ((epoch+1) // 10))
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        print(colored(f"Loss: {loss.item():.4f}", 'magenta'))
+        # print(colored(f"Loss: {loss.item():.4f}", 'magenta'))
 
-    print(colored(f"Uniform penalty: {uniform_penalty}", 'cyan'))
+    # print(colored(f"Uniform penalty: {uniform_penalty}", 'cyan'))
     print(colored(f"pis_loss: {pis_loss}", 'cyan'))
     print(colored(f"mus_loss: {mus_loss}", 'cyan'))
     print(colored(f"logvars_loss: {logvars_loss}", 'cyan'))
 
-    if (epoch+1)%1==0:
+    if (epoch+1)%10==0:
         print("Epoch[{}/{}]: mus_loss:{:.3f}, vars_loss:{:.3f}, pis_loss:{:.3f}".format(epoch+1,
                                                                                         max_epochs,
                                                                                         mus_loss.item(),
