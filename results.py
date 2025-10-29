@@ -6,6 +6,8 @@ import torch
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
+import pandas as pd
+import anndata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -80,8 +82,12 @@ class GenerationResults:
         # Save summary statistics
         self._save_summary_stats(save_dir)
 
-        # Generate visualizations
+        # Generate visualizations (save to files)
         self._generate_visualizations(save_dir)
+
+        # Also display visualizations inline in notebooks
+        print(colored("Displaying visualizations inline...", "yellow"))
+        self.plot_visualizations(show_plots=True)
 
     @classmethod
     def load_results(cls, save_dir: Path) -> "GenerationResults":
@@ -162,6 +168,180 @@ class GenerationResults:
         summary.update(self.generation_stats)
 
         return summary
+
+    def to_anndata(self) -> anndata.AnnData:
+        """Convert generation results to AnnData object."""
+        # Concatenate all generated cells
+        all_cells = []
+        all_cell_types = []
+        all_sample_ids = []
+
+        for sample_id, cells_tensor in self.generated_cells.items():
+            cell_types_tensor = self.cell_types[sample_id]
+
+            # Convert tensors to numpy
+            cells_np = cells_tensor.detach().cpu().numpy()
+            cell_types_np = cell_types_tensor.detach().cpu().numpy()
+
+            all_cells.append(cells_np)
+            all_cell_types.extend(cell_types_np)
+            all_sample_ids.extend([sample_id] * cells_np.shape[0])
+
+        # Concatenate all cells
+        X = np.vstack(all_cells)
+
+        # Create observation metadata
+        obs = pd.DataFrame({"sample_id": all_sample_ids, "cell_type": all_cell_types})
+
+        # Create variable metadata (genes)
+        var = pd.DataFrame(index=[f"gene_{i}" for i in range(X.shape[1])])
+
+        # Create AnnData object
+        adata = anndata.AnnData(X=X, obs=obs, var=var)
+
+        return adata
+
+    def print_summary(self):
+        """Print a formatted summary of generation results."""
+        summary = self.get_summary_statistics()
+
+        print(f"📊 Generation Summary")
+        print(f"{'='*25}")
+        print(f"Total samples: {summary['num_samples']}")
+        print(f"Total cells: {summary['total_cells_generated']}")
+        print(f"Samples: {', '.join(summary['sample_ids'])}")
+
+        print(f"\n📋 Per-sample breakdown:")
+        for sample_id, stats in summary["per_sample_stats"].items():
+            print(f"  {sample_id}: {stats['num_cells']} cells")
+
+    @property
+    def sample_ids(self) -> List[str]:
+        """Get list of sample IDs."""
+        return list(self.generated_cells.keys())
+
+    def save(self, filepath: Path):
+        """Save generation results to file."""
+        filepath = Path(filepath)
+        with open(filepath, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, filepath: Path) -> "GenerationResults":
+        """Load generation results from file."""
+        filepath = Path(filepath)
+        with open(filepath, "rb") as f:
+            return pickle.load(f)
+
+    def plot_visualizations(self, show_plots: bool = True):
+        """Generate and optionally display visualization plots inline."""
+        try:
+            # Cell type distribution plot
+            self._plot_cell_type_distribution_inline(show_plots)
+
+            # Per-sample cell type distribution
+            self._plot_per_sample_distribution_inline(show_plots)
+
+        except Exception as e:
+            print(colored(f"Warning: Failed to generate visualizations: {e}", "yellow"))
+
+    def _plot_cell_type_distribution_inline(self, show_plot: bool = True):
+        """Plot overall cell type distribution inline."""
+        all_cell_types = torch.cat(list(self.cell_types.values()))
+        unique_types, counts = torch.unique(all_cell_types, return_counts=True)
+
+        # Convert to numpy for plotting
+        types_np = unique_types.cpu().numpy()
+        counts_np = counts.cpu().numpy()
+
+        # Create labels using mapping dict if available
+        if self.mapping_dict:
+            reverse_mapping = {v: k for k, v in self.mapping_dict.items()}
+            labels = [reverse_mapping.get(int(t), f"Type_{int(t)}") for t in types_np]
+        else:
+            labels = [f"Type_{int(t)}" for t in types_np]
+
+        # Create bar plot
+        plt.figure(figsize=(10, 6))
+        bars = plt.bar(labels, counts_np, alpha=0.7)
+        plt.title("Overall Cell Type Distribution")
+        plt.xlabel("Cell Type")
+        plt.ylabel("Number of Cells")
+        plt.xticks(rotation=45, ha="right")
+        plt.grid(True, alpha=0.3)
+
+        # Add value labels on bars
+        for bar, count in zip(bars, counts_np):
+            plt.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.01 * max(counts_np),
+                str(int(count)),
+                ha="center",
+                va="bottom",
+            )
+
+        plt.tight_layout()
+        if show_plot:
+            plt.show()
+        plt.close()
+
+    def _plot_per_sample_distribution_inline(self, show_plot: bool = True):
+        """Plot cell type distribution per sample inline."""
+        n_samples = len(self.generated_cells)
+        cols = min(3, n_samples)
+        rows = (n_samples + cols - 1) // cols
+
+        # Create subplots
+        fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 4 * rows))
+        if n_samples == 1:
+            axes = [axes]
+        elif rows == 1:
+            axes = [axes] if n_samples == 1 else axes
+        else:
+            axes = axes.flatten()
+
+        for idx, (sample_id, cell_types_tensor) in enumerate(self.cell_types.items()):
+            ax = axes[idx] if n_samples > 1 else axes[0]
+
+            unique_types, counts = torch.unique(cell_types_tensor, return_counts=True)
+            types_np = unique_types.cpu().numpy()
+            counts_np = counts.cpu().numpy()
+
+            # Create labels
+            if self.mapping_dict:
+                reverse_mapping = {v: k for k, v in self.mapping_dict.items()}
+                labels = [
+                    reverse_mapping.get(int(t), f"Type_{int(t)}") for t in types_np
+                ]
+            else:
+                labels = [f"Type_{int(t)}" for t in types_np]
+
+            # Create bar plot
+            bars = ax.bar(labels, counts_np, alpha=0.7)
+            ax.set_title(f"Sample: {sample_id}")
+            ax.set_xlabel("Cell Type")
+            ax.set_ylabel("Number of Cells")
+            ax.tick_params(axis="x", rotation=45)
+            ax.grid(True, alpha=0.3)
+
+            # Add value labels on bars
+            for bar, count in zip(bars, counts_np):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01 * max(counts_np),
+                    str(int(count)),
+                    ha="center",
+                    va="bottom",
+                )
+
+        # Hide unused subplots
+        for idx in range(n_samples, len(axes)):
+            axes[idx].set_visible(False)
+
+        plt.tight_layout()
+        if show_plot:
+            plt.show()
+        plt.close()
 
     def _save_summary_stats(self, save_dir: Path):
         """Save summary statistics to text file."""

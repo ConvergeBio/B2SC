@@ -9,6 +9,8 @@ from .helpers import (
     ensure_directory,
     print_model_summary,
     format_time,
+    make_pseudo_bulk_adata,
+    calculate_pseudobulk,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "ensure_directory",
     "print_model_summary",
     "format_time",
+    "make_pseudo_bulk_adata",
+    "calculate_pseudobulk",
 ]

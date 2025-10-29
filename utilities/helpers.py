@@ -11,6 +11,9 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, Union
 from termcolor import colored
+import scanpy as sc
+import pandas as pd
+import anndata
 
 
 def set_random_seeds(seed: int = 42):
@@ -138,3 +141,110 @@ def format_time(seconds: float) -> str:
     else:
         hours = seconds / 3600
         return f"{hours:.1f}h"
+
+
+def make_pseudo_bulk_adata(sc_h5ad_path: str, groupby: str, out_h5ad: str = None):
+    """
+    Reads an .h5ad, sums counts over the `groupby` obs column,
+    and returns a new AnnData (groups × genes).
+
+    Parameters
+    ----------
+    sc_h5ad_path
+        Path to your single-cell AnnData (.h5ad).
+    groupby
+        Column in adata.obs to aggregate by (e.g. 'cell_type' or 'sample').
+    out_h5ad
+        If provided, will write the result to this path.
+
+    Returns
+    -------
+    AnnData
+        .X  : numpy array of shape (n_groups, n_genes)
+        .obs: DataFrame with index = unique group labels
+        .var: DataFrame with index = gene names
+    """
+    # 1) load
+    adata = sc.read_h5ad(sc_h5ad_path)
+
+    # 2) ensure dense matrix
+    X = adata.X
+    if not isinstance(X, (np.ndarray,)):
+        X = X.toarray()
+
+    # 3) build a cell×gene DataFrame
+    df = pd.DataFrame(data=X, index=adata.obs_names, columns=adata.var_names)
+
+    # 4) attach the grouping vector
+    if groupby not in adata.obs:
+        raise KeyError(f"'{groupby}' not in adata.obs")
+    df[groupby] = adata.obs[groupby].values
+
+    # 5) sum counts per group → DataFrame (n_groups × n_genes)
+    bulk_counts = df.groupby(groupby).sum()
+
+    # 6) construct the AnnData
+    bulk_adata = anndata.AnnData(
+        X=bulk_counts.values,
+        obs=pd.DataFrame(index=bulk_counts.index),
+        var=pd.DataFrame(index=bulk_counts.columns),
+    )
+
+    # optional: write to disk
+    if out_h5ad:
+        bulk_adata.write(out_h5ad)
+
+    return bulk_adata
+
+
+def calculate_pseudobulk(adata: anndata.AnnData, groupby_col: str) -> anndata.AnnData:
+    """
+    Calculate pseudobulk data by summing expression values for each group.
+
+    This is a more flexible version that works directly with AnnData objects
+    without requiring file I/O.
+
+    Parameters
+    ----------
+    adata : anndata.AnnData
+        Single-cell AnnData object with cells as observations
+    groupby_col : str
+        Column in adata.obs to group by (e.g., 'donor_id', 'cell_type', 'sample')
+
+    Returns
+    -------
+    anndata.AnnData
+        Pseudobulk AnnData object with groups as observations
+        .X : expression matrix (n_groups × n_genes)
+        .obs : metadata for each group
+        .var : gene metadata (copied from input)
+    """
+    # Ensure dense matrix
+    X = adata.X
+    if not isinstance(X, np.ndarray):
+        X = X.toarray()
+
+    # Check if groupby column exists
+    if groupby_col not in adata.obs.columns:
+        raise KeyError(f"Column '{groupby_col}' not found in adata.obs")
+
+    # Create DataFrame for easier grouping
+    df = pd.DataFrame(data=X, index=adata.obs_names, columns=adata.var_names)
+
+    # Add grouping column
+    df[groupby_col] = adata.obs[groupby_col].values
+
+    # Sum expression values by group
+    pseudobulk_df = df.groupby(groupby_col).sum()
+
+    # Create new AnnData object
+    pseudobulk_adata = anndata.AnnData(
+        X=pseudobulk_df.values,
+        obs=pd.DataFrame(index=pseudobulk_df.index),
+        var=adata.var.copy(),
+    )
+
+    # Add group information to obs
+    pseudobulk_adata.obs[groupby_col] = pseudobulk_adata.obs.index
+
+    return pseudobulk_adata

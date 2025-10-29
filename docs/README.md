@@ -30,8 +30,8 @@ from B2SC import B2SCConfig, B2SCPipeline
 
 # Configure the pipeline
 config = B2SCConfig(
-    sc_data_path="data/single_cell.h5ad",
-    bulk_data_path="data/bulk_samples.h5ad",
+    sc_training_data_path="data/single_cell.h5ad",
+    bulk_data_for_deconv_path="data/bulk_samples.h5ad",
     base_dir="./results"
 )
 
@@ -80,8 +80,8 @@ from B2SC import B2SCConfig, B2SCPipeline
 
 # Step 1: Configure
 config = B2SCConfig(
-    sc_data_path="path/to/single_cell_data.h5ad",
-    bulk_data_path="path/to/bulk_data.h5ad",
+    sc_training_data_path="path/to/single_cell_data.h5ad",
+    bulk_data_for_deconv_path="path/to/bulk_data.h5ad",
     base_dir="./my_results",
     gmvae_epochs=50,
     bulk_encoder_epochs=100,
@@ -136,7 +136,7 @@ print("Quality metrics:", quality_metrics)
 from B2SC import B2SCConfig, GMVAETrainer, DataManager
 
 # Setup
-config = B2SCConfig(sc_data_path="data/single_cell.h5ad")
+config = B2SCConfig(sc_training_data_path="data/single_cell.h5ad")
 data_manager = DataManager(config)
 gmvae_trainer = GMVAETrainer(config, data_manager)
 
@@ -166,7 +166,7 @@ metrics = gmvae_trainer.train(
 from B2SC import B2SCConfig, BulkEncoderTrainer, GMVAETrainer, DataManager
 
 # Setup (requires trained GMVAE)
-config = B2SCConfig(sc_data_path="data/single_cell.h5ad")
+config = B2SCConfig(sc_training_data_path="data/single_cell.h5ad")
 data_manager = DataManager(config)
 gmvae_trainer = GMVAETrainer(config, data_manager)  # Must be trained first
 be_trainer = BulkEncoderTrainer(config, gmvae_trainer, data_manager)
@@ -193,8 +193,8 @@ metrics = be_trainer.train(dataloader=be_loader)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `sc_data_path` | str | **Required** | Path to single-cell RNA-seq data (.h5ad format) |
-| `bulk_data_path` | str | None | Path to bulk RNA-seq data (.h5ad format) |
+| `sc_training_data_path` | str | **Required** | Path to single-cell RNA-seq training data (.h5ad format) |
+| `bulk_data_for_deconv_path` | str | None | Path to bulk RNA-seq data for deconvolution (.h5ad format) |
 | `barcode_path` | str | None | Path to cell type barcode file (.csv format) |
 
 #### Model Architecture
@@ -202,8 +202,20 @@ metrics = be_trainer.train(dataloader=be_loader)
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_dim` | int | Auto-detected | Number of genes (features) |
-| `hidden_dim` | int | 2048 | Hidden layer dimension for both models |
-| `latent_dim` | int | 1024 | Latent space dimension |
+| `latent_dim` | int | 1024 | **Shared** latent space dimension for both models |
+
+##### Model-Specific Hidden Dimensions
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `gmvae_hidden_dim` | int | 2048 | GMVAE hidden layer dimension |
+| `bulk_hidden_dim` | int | 2048 | BulkEncoder hidden layer dimension |
+
+**Important:** The `latent_dim` must be the same for both models because:
+- GMVAE learns to encode cells into this latent space
+- BulkEncoder predicts mixture parameters for the **same** latent space
+- During generation, both models must work in the same latent space
+
+**Note:** For backward compatibility, `hidden_dim` still works and refers to `gmvae_hidden_dim`.
 
 #### Training Configuration
 
@@ -211,8 +223,27 @@ metrics = be_trainer.train(dataloader=be_loader)
 |-----------|------|---------|-------------|
 | `gmvae_epochs` | int | 30 | Number of training epochs for GMVAE |
 | `bulk_encoder_epochs` | int | 100 | Number of training epochs for BulkEncoder |
-| `learning_rate` | float | 5e-4 | Learning rate for both models |
+| `gmvae_lr` | float | 5e-4 | Learning rate for GMVAE model |
+| `bulk_encoder_lr` | float | 1e-3 | Learning rate for BulkEncoder model |
 | `batch_size` | int | Auto-calculated | Batch size (typically num_cells/20) |
+
+#### GMVAE Loss Weights
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `gmvae_recon_loss_weight` | float | 5.0 | Weight for reconstruction loss |
+| `gmvae_zinb_loss_weight` | float | 1.0 | Weight for ZINB loss |
+| `gmvae_fraction_loss_weight` | float | 10.0 | Weight for fraction loss |
+| `gmvae_kl_loss_weight` | float | 1.0 | Weight for KL divergence loss |
+
+#### BulkEncoder Loss Weights
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `bulk_mus_loss_weight` | float | 1.0 | Weight for means (mus) reconstruction loss |
+| `bulk_logvars_loss_weight` | float | 1.0 | Weight for log-variances reconstruction loss |
+| `bulk_pis_loss_weight` | float | 50.0 | Weight for mixture proportions (pis) loss |
+| `bulk_uniform_penalty_weight` | float | 100.0 | Weight for uniform penalty (encourages diversity) |
 
 #### Generation Configuration
 
@@ -245,7 +276,30 @@ metrics = be_trainer.train(dataloader=be_loader)
 #### Training Parameters
 - **`gmvae_epochs`**: 30-100 epochs usually sufficient, monitor training curves
 - **`bulk_encoder_epochs`**: 50-200 epochs, depends on data complexity
-- **`learning_rate`**: Start with 5e-4, reduce if training is unstable
+- **`gmvae_lr`**: Start with 5e-4, reduce if GMVAE training is unstable
+- **`bulk_encoder_lr`**: Start with 1e-3, reduce if BulkEncoder training is unstable
+
+#### Loss Weight Tuning
+
+If certain losses aren't decreasing properly (e.g., fraction loss), you can adjust the weights:
+
+```python
+# Example: Tune loss weights for better training
+config = B2SCConfig(
+    # ... other parameters ...
+    
+    # GMVAE loss weights
+    gmvae_fraction_loss_weight=20.0,  # Default: 10.0 - increase if fraction loss not decreasing
+    gmvae_recon_loss_weight=3.0,      # Default: 5.0 - reduce if reconstruction dominates
+    gmvae_kl_loss_weight=2.0,         # Default: 1.0 - increase for better latent space
+    
+    # BulkEncoder loss weights  
+    bulk_pis_loss_weight=100.0,       # Default: 50.0 - increase if fraction loss not decreasing
+    bulk_uniform_penalty_weight=50.0, # Default: 100.0 - reduce if dominating
+    bulk_mus_loss_weight=2.0,         # Default: 1.0 - fine-tune reconstruction
+    bulk_logvars_loss_weight=2.0,     # Default: 1.0 - fine-tune reconstruction
+)
+```
 - **`batch_size`**: Auto-calculated as num_cells/20, can be manually set
 
 #### Generation Parameters
@@ -323,7 +377,7 @@ print(f"Best epoch: {best_epoch}")
 ```python
 # Generate with specific parameters
 results = pipeline.generate_cells(
-    bulk_data_path="custom_bulk_data.h5ad",
+    bulk_data_for_deconv_path="custom_bulk_data.h5ad",
     sample_ids=["sample_A", "sample_B", "sample_C"],
     num_cells=1000
 )
@@ -419,7 +473,7 @@ print(f"Generated {summary['total_cells_generated']} cells")
 ```python
 # Reduce batch size
 config = B2SCConfig(
-    sc_data_path="data.h5ad",
+    sc_training_data_path="data.h5ad",
     batch_size=32,  # Smaller batch size
     hidden_dim=1024  # Smaller model
 )
@@ -429,8 +483,9 @@ config = B2SCConfig(
 ```python
 # Reduce learning rate
 config = B2SCConfig(
-    sc_data_path="data.h5ad",
-    learning_rate=1e-4,  # Smaller learning rate
+    sc_training_data_path="data.h5ad",
+    gmvae_lr=5e-4,
+    bulk_encoder_lr=1e-3,
     gmvae_epochs=50      # More epochs
 )
 ```
@@ -439,7 +494,7 @@ config = B2SCConfig(
 ```python
 # Increase model capacity and training time
 config = B2SCConfig(
-    sc_data_path="data.h5ad",
+    sc_training_data_path="data.h5ad",
     hidden_dim=4096,        # Larger model
     gmvae_epochs=100,       # More training
     bulk_encoder_epochs=200
@@ -450,7 +505,7 @@ config = B2SCConfig(
 ```python
 # Specify device explicitly
 config = B2SCConfig(
-    sc_data_path="data.h5ad",
+    sc_training_data_path="data.h5ad",
     device="cpu"  # or "cuda" or "mps"
 )
 ```
@@ -487,8 +542,8 @@ from B2SC import B2SCConfig, B2SCPipeline
 
 # Simple configuration
 config = B2SCConfig(
-    sc_data_path="my_single_cell_data.h5ad",
-    bulk_data_path="my_bulk_data.h5ad",
+    sc_training_data_path="my_single_cell_data.h5ad",
+    bulk_data_for_deconv_path="my_bulk_data.h5ad",
     base_dir="./analysis_results"
 )
 
@@ -506,15 +561,16 @@ print(f"Analysis complete! Generated cells for {len(results.generated_cells)} sa
 ```python
 # Research-grade configuration
 config = B2SCConfig(
-    sc_data_path="reference_atlas.h5ad",
-    bulk_data_path="patient_samples.h5ad",
+    sc_training_data_path="reference_atlas.h5ad",
+    bulk_data_for_deconv_path="patient_samples.h5ad",
     base_dir="./research_output",
     hidden_dim=4096,           # Large model
     latent_dim=2048,
     gmvae_epochs=100,          # Extensive training
     bulk_encoder_epochs=200,
     num_cells_to_generate=2000, # Many cells per sample
-    learning_rate=1e-4         # Conservative learning rate
+    gmvae_lr=1e-4,             # Conservative learning rate for GMVAE
+    bulk_encoder_lr=1e-3       # Standard learning rate for BulkEncoder
 )
 
 # Step-by-step execution with monitoring

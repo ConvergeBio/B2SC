@@ -71,7 +71,7 @@ class DataManager:
             mapping_dict,
             gene_list,
         ) = self._load_data(
-            data_dir=self.config.sc_data_path,
+            data_dir=self.config.sc_training_data_path,
             barcode_path=self.config.barcode_path,
             generate_pseudo_cells=self.config.generate_pseudo_cells,
             test_samples=self.config.test_samples,
@@ -114,7 +114,7 @@ class DataManager:
     ) -> Tuple[DataLoader, List[str]]:
         """Load bulk RNA-seq data for generation."""
         if bulk_data_path is None:
-            bulk_data_path = self.config.bulk_data_path
+            bulk_data_path = self.config.bulk_data_for_deconv_path
 
         if bulk_data_path is None:
             raise ValueError("No bulk data path provided")
@@ -345,7 +345,7 @@ class DataManager:
         else:
             print("Not normalizing sample bulk data")
 
-        print(f"Sum expression per sample: {adata_bulk.X.sum(axis=1)}")
+        # print(f"Sum expression per sample: {adata_bulk.X.sum(axis=1)}")
 
         # 2) Extract counts matrix (dense)
         X = adata_bulk.X

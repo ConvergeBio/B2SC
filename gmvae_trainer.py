@@ -107,7 +107,7 @@ class GMVAETrainer:
 
         # Initialize optimizer
         self.optimizer = torch.optim.Adam(
-            self.model.parameters(), lr=self.config.learning_rate
+            self.model.parameters(), lr=self.config.gmvae_lr
         )
 
         # Print model summary
@@ -239,14 +239,17 @@ class GMVAETrainer:
             loss_kl_weighted = loss_kl * kl_weight
             loss_kl_weighted = 1 if loss_kl_weighted > 1 else loss_kl_weighted
 
-            # Total loss
+            # Total loss with configurable weights
             loss = (
-                loss_recon * 5 + zinb_loss_val + (fraction_loss * 10) + loss_kl_weighted
+                loss_recon * self.config.gmvae_recon_loss_weight
+                + zinb_loss_val * self.config.gmvae_zinb_loss_weight
+                + fraction_loss * self.config.gmvae_fraction_loss_weight
+                + loss_kl_weighted * self.config.gmvae_kl_loss_weight
             )
             loss.backward()
             self.optimizer.step()
 
-            print(colored(f"Loss: {loss.item():.4f}", "magenta"))
+            # print(colored(f"Loss: {loss.item():.4f}", "magenta"))
 
             # Accumulate losses
             total_loss += loss.item()
@@ -256,11 +259,11 @@ class GMVAETrainer:
             epoch_zinb_loss += zinb_loss_val.item()
 
         # Print epoch summary
-        print(colored(f"fraction_loss: {fraction_loss:.4f}", "cyan"))
-        print(colored(f"loss_kl unweighted: {loss_kl:.4f}", "blue"))
-        print(colored(f"loss_kl weighted: {loss_kl_weighted:.4f}", "blue"))
-        print(colored(f"kl_weight: {kl_weight:.4f}", "blue"))
-        print(colored(f"loss_recon: {loss_recon:.4f}", "blue"))
+        # print(colored(f"fraction_loss: {fraction_loss:.4f}", "cyan"))
+        # print(colored(f"loss_kl unweighted: {loss_kl:.4f}", "blue"))
+        # print(colored(f"loss_kl weighted: {loss_kl_weighted:.4f}", "blue"))
+        # print(colored(f"kl_weight: {kl_weight:.4f}", "blue"))
+        # print(colored(f"loss_recon: {loss_recon:.4f}", "blue"))
         print("Epoch finished")
 
         # Create metrics object
@@ -300,10 +303,18 @@ class GMVAETrainer:
         torch.save(self.model.state_dict(), self.config.base_dir / "GMVAE_model.pt")
         print("GMVAE Model saved.")
 
+        # Extract and save GMVAE parameters for BulkEncoder
+        self._save_gmvae_parameters()
+
         # Save metrics
         self.metrics_tracker.save_metrics(self.config.base_dir / "gmvae_metrics.pkl")
         self.metrics_tracker.plot_training_curves(
             self.config.base_dir / "gmvae_training_curves.png"
+        )
+
+        # Generate stacked loss contribution plot
+        self.metrics_tracker.plot_stacked_loss_contributions(
+            self.config.base_dir / "gmvae_loss_contributions.png", model_type="GMVAE"
         )
 
     def _generate_umap_plots(
@@ -365,6 +376,46 @@ class GMVAETrainer:
         plt.grid(True, edgecolor="black")
         plt.savefig(self.config.base_dir / "umap_recon.png")
         plt.close()
+
+        self.model.train()
+
+    def _save_gmvae_parameters(self):
+        """Extract and save GMVAE parameters (mus, logvars, pis) for BulkEncoder training."""
+        print("Extracting and saving GMVAE parameters...")
+
+        self.model.eval()
+
+        # Collect parameters from all training data
+        all_mus = []
+        all_logvars = []
+        all_pis = []
+
+        # Get the training dataloader from data manager
+        gmvae_dataloader, _ = self.data_manager.load_single_cell_data()
+
+        with torch.no_grad():
+            for data, labels in gmvae_dataloader:
+                data = data.to(self.device)
+                labels = labels.to(self.device)
+
+                # Forward pass to get parameters
+                reconstructed, mus, logvars, pis, zs = self.model(data, labels)
+
+                all_mus.append(mus.cpu())
+                all_logvars.append(logvars.cpu())
+                all_pis.append(pis.cpu())
+
+        # Concatenate and compute means
+        mus = torch.cat(all_mus, dim=0).mean(0)
+        logvars = torch.cat(all_logvars, dim=0).mean(0)
+        pis = torch.cat(all_pis, dim=0).mean(0)
+
+        # Save the parameters
+        print(f"Saving mus, logvars, and pis to folder: {self.config.base_dir}")
+        torch.save(mus, self.config.base_dir / "GMVAE_mus.pt")
+        torch.save(logvars, self.config.base_dir / "GMVAE_logvars.pt")
+        torch.save(pis, self.config.base_dir / "GMVAE_pis.pt")
+        print("GMVAE mus, logvars, and pis saved.")
 
         self.model.train()
 

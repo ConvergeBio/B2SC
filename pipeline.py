@@ -77,7 +77,7 @@ class B2SCPipeline:
         n_components = len(self.data_manager.cell_type_fractions)
         self.gmvae_trainer.initialize_model(
             input_dim=self.config.input_dim,
-            hidden_dim=self.config.hidden_dim,
+            hidden_dim=self.config.gmvae_hidden_dim,
             latent_dim=self.config.latent_dim,
             n_components=n_components,
         )
@@ -112,7 +112,7 @@ class B2SCPipeline:
         n_components = len(self.data_manager.cell_type_fractions)
         self.bulk_encoder_trainer.initialize_model(
             input_dim=self.config.input_dim,
-            hidden_dim=self.config.hidden_dim,
+            hidden_dim=self.config.bulk_hidden_dim,
             latent_dim=self.config.latent_dim,
             n_components=n_components,
         )
@@ -191,7 +191,7 @@ class B2SCPipeline:
             "total_cells_generated": sum(
                 tensor.shape[0] for tensor in generated_tensor_dict.values()
             ),
-            "bulk_data_path": bulk_data_path or self.config.bulk_data_path,
+            "bulk_data_path": bulk_data_path or self.config.bulk_data_for_deconv_path,
         }
 
         # Create results object
@@ -271,7 +271,7 @@ class B2SCPipeline:
         n_components = len(self.data_manager.cell_type_fractions)
         gmvae = GaussianMixtureVAE(
             input_dim=self.config.input_dim,
-            hidden_dim=self.config.hidden_dim,
+            hidden_dim=self.config.gmvae_hidden_dim,
             latent_dim=self.config.latent_dim,
             n_components=n_components,
         )
@@ -299,7 +299,7 @@ class B2SCPipeline:
         n_components = len(self.data_manager.cell_type_fractions)
         bulk_encoder = BulkEncoder(
             input_dim=self.config.input_dim,
-            hidden_dim=self.config.hidden_dim,
+            hidden_dim=self.config.bulk_hidden_dim,
             latent_dim=self.config.latent_dim,
             n_components=n_components,
         )

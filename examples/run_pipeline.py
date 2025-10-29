@@ -28,8 +28,8 @@ def simple_pipeline_example():
 
     # Configure pipeline
     config = B2SCConfig(
-        sc_data_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable.h5ad",
-        bulk_data_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_pseudobulk.h5ad",
+        sc_training_data_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable.h5ad",
+        bulk_data_for_deconv_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_pseudobulk.h5ad",
         base_dir=Path("./results_simple"),
         gmvae_epochs=30,
         bulk_encoder_epochs=100,
@@ -58,12 +58,13 @@ def advanced_pipeline_example():
 
     # Configure pipeline with custom settings
     config = B2SCConfig(
-        sc_data_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable.h5ad",
-        bulk_data_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_pseudobulk.h5ad",
+        sc_training_data_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable.h5ad",
+        bulk_data_for_deconv_path="/home/shared-ssh-key/convergeSC-Internal/bulk2single/data/mouse_liver_sc_healthy_5K_highly_variable_pseudobulk.h5ad",
         base_dir=Path("./results_advanced"),
         gmvae_epochs=50,  # More epochs for better training
         bulk_encoder_epochs=150,
-        learning_rate=1e-4,  # Lower learning rate
+        gmvae_lr=5e-4,
+        bulk_encoder_lr=1e-3,
         hidden_dim=1024,  # Smaller hidden dimension
         latent_dim=512,
         num_cells_to_generate=1000,  # Generate more cells
@@ -131,7 +132,7 @@ def configuration_examples():
 
     # Example 1: Minimal configuration
     print("1. Minimal Configuration:")
-    minimal_config = B2SCConfig(sc_data_path="path/to/single_cell_data.h5ad")
+    minimal_config = B2SCConfig(sc_training_data_path="path/to/single_cell_data.h5ad")
     print(f"   Input dim: {minimal_config.input_dim} (auto-detected)")
     print(f"   Batch size: {minimal_config.batch_size} (auto-calculated)")
     print(f"   Device: {minimal_config.device}")
@@ -139,7 +140,7 @@ def configuration_examples():
     # Example 2: GPU configuration
     print("\n2. GPU Configuration:")
     gpu_config = B2SCConfig(
-        sc_data_path="path/to/single_cell_data.h5ad",
+        sc_training_data_path="path/to/single_cell_data.h5ad",
         device="cuda",
         batch_size=128,
     )
@@ -149,12 +150,13 @@ def configuration_examples():
     # Example 3: Research configuration
     print("\n3. Research Configuration:")
     research_config = B2SCConfig(
-        sc_data_path="path/to/single_cell_data.h5ad",
-        bulk_data_path="path/to/bulk_data.h5ad",
+        sc_training_data_path="path/to/single_cell_data.h5ad",
+        bulk_data_for_deconv_path="path/to/bulk_data.h5ad",
         base_dir=Path("./research_results"),
         gmvae_epochs=100,
         bulk_encoder_epochs=200,
-        learning_rate=1e-5,
+        gmvae_lr=1e-4,
+        bulk_encoder_lr=1e-3,
         hidden_dim=4096,
         latent_dim=2048,
         num_cells_to_generate=5000,

@@ -117,9 +117,34 @@ class BulkEncoderTrainer:
         # Check for existing checkpoint
         checkpoint_path = self.config.base_dir / "bulkEncoder_model.pt"
         if checkpoint_path.exists():
-            encoder_state_dict = torch.load(checkpoint_path)
-            self.model.load_state_dict(encoder_state_dict, strict=True)
-            print("Loaded existing bulkEncoder_model.pt")
+            try:
+                encoder_state_dict = torch.load(checkpoint_path)
+                self.model.load_state_dict(encoder_state_dict, strict=True)
+                print("Loaded existing bulkEncoder_model.pt")
+            except RuntimeError as e:
+                if "size mismatch" in str(e):
+                    print(
+                        colored(
+                            f"Warning: Architecture mismatch in saved checkpoint. Reinitializing model.",
+                            "yellow",
+                        )
+                    )
+                    print(
+                        colored(
+                            f"Current architecture: hidden_dim={hidden_dim}, latent_dim={latent_dim}",
+                            "yellow",
+                        )
+                    )
+                    # Initialize with new architecture instead
+                    for m in self.model.modules():
+                        if isinstance(m, nn.Linear):
+                            nn.init.xavier_normal_(m.weight)
+                            nn.init.zeros_(m.bias)
+                    print(
+                        "Initialized BulkEncoder with Xavier weights (new architecture)"
+                    )
+                else:
+                    raise e
         else:
             # Initialize weights
             for m in self.model.modules():
@@ -131,7 +156,9 @@ class BulkEncoderTrainer:
         self.model = self.model.to(self.device)
 
         # Initialize optimizer
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=self.config.bulk_encoder_lr
+        )
 
         # Print model summary
         print_model_summary(self.model, "BulkEncoder")
@@ -194,7 +221,7 @@ class BulkEncoderTrainer:
 
             # Create bulk data by summing single cells
             bulk_data = data.sum(dim=0)
-            print(f"Sum expression per sample: {bulk_data.sum()}")
+            # print(f"Sum expression per sample: {bulk_data.sum()}")
             bulk_data = bulk_data.unsqueeze(0)
 
             # Forward pass
@@ -227,15 +254,20 @@ class BulkEncoderTrainer:
                 pis.unsqueeze(0), uniform.unsqueeze(0)
             ).squeeze()
 
-            # Total loss (same weights as legacy)
-            loss = mus_loss + logvars_loss + (pis_loss * 50) + (uniform_penalty * 100)
+            # Total loss with configurable weights
+            loss = (
+                mus_loss * self.config.bulk_mus_loss_weight
+                + logvars_loss * self.config.bulk_logvars_loss_weight
+                + pis_loss * self.config.bulk_pis_loss_weight
+                + uniform_penalty * self.config.bulk_uniform_penalty_weight
+            )
 
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            print(colored(f"Loss: {loss.item():.4f}", "magenta"))
+            # print(colored(f"Loss: {loss.item():.4f}", "magenta"))
 
             # Accumulate losses
             total_loss += loss.item()
@@ -245,10 +277,10 @@ class BulkEncoderTrainer:
             epoch_uniform_penalty += uniform_penalty.item()
 
         # Print epoch summary
-        print(colored(f"Uniform penalty: {uniform_penalty}", "cyan"))
-        print(colored(f"pis_loss: {pis_loss}", "cyan"))
-        print(colored(f"mus_loss: {mus_loss}", "cyan"))
-        print(colored(f"logvars_loss: {logvars_loss}", "cyan"))
+        # print(colored(f"Uniform penalty: {uniform_penalty}", "cyan"))
+        # print(colored(f"pis_loss: {pis_loss}", "cyan"))
+        # print(colored(f"mus_loss: {mus_loss}", "cyan"))
+        # print(colored(f"logvars_loss: {logvars_loss}", "cyan"))
 
         if (epoch + 1) % 1 == 0:
             print(
@@ -261,14 +293,17 @@ class BulkEncoderTrainer:
                 )
             )
 
-        # Create metrics object
+        # Create metrics object (using accumulated losses like GMVAE)
         metrics = TrainingMetrics(
             epoch=epoch,
             total_loss=total_loss,
-            reconstruction_loss=epoch_mus_loss,  # Using mus_loss as "reconstruction"
-            kl_loss=epoch_logvars_loss,  # Using logvars_loss as "kl"
-            fraction_loss=epoch_pis_loss,
-            zinb_loss=epoch_uniform_penalty,  # Using uniform_penalty as "zinb"
+            reconstruction_loss=0.0,  # Not applicable for BulkEncoder
+            kl_loss=0.0,  # Not applicable for BulkEncoder
+            # BulkEncoder specific losses
+            mus_loss=epoch_mus_loss,
+            logvars_loss=epoch_logvars_loss,
+            pis_loss=epoch_pis_loss,
+            uniform_penalty=epoch_uniform_penalty,
         )
 
         return metrics
@@ -298,6 +333,12 @@ class BulkEncoderTrainer:
         )
         self.metrics_tracker.plot_training_curves(
             self.config.base_dir / "bulk_encoder_training_curves.png"
+        )
+
+        # Generate stacked loss contribution plot
+        self.metrics_tracker.plot_stacked_loss_contributions(
+            self.config.base_dir / "bulk_encoder_loss_contributions.png",
+            model_type="BulkEncoder",
         )
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
