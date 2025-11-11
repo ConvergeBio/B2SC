@@ -1,0 +1,115 @@
+# GMVAE Hyperparameter Tuning - W&B Sweep Configuration (Stage 1)
+# This sweep optimizes GMVAE hyperparameters independently.
+# Use the best configuration from this sweep for Stage 2 (BulkEncoder tuning).
+
+# W&B project configuration
+project: b2sc-gmvae-hpt
+name: gmvae_test_v1  # Optional: sweep name (leave blank for auto-generated)
+
+# Optimization strategy
+method: bayes
+
+# Primary metric: validation reconstruction loss (raw, unweighted)
+# This metric is independent of tunable loss weights and directly measures
+# how well the model reconstructs gene expression
+metric:
+  name: val_metric  # This will be val_reconstruction_loss
+  goal: minimize
+
+# Early termination (optional - uncomment to enable)
+# early_terminate:
+#   type: envelope
+#   min_iter: 5
+#   tolerance: 0.05
+
+# ==============================================================================
+# HYPERPARAMETER SEARCH SPACE
+# ==============================================================================
+parameters:
+  # ---------------------------------------------------------------------------
+  # DATA PATHS (fixed for all runs)
+  # ---------------------------------------------------------------------------
+  sc_training_path:
+    value: "../examples/tutorial_outputs/train_data.h5ad"
+  
+  sc_validation_path:
+    value: "../examples/tutorial_outputs/val_data.h5ad"
+  
+  base_dir:
+    value: "./gmvae_hpt_results_v1"
+  
+  # ---------------------------------------------------------------------------
+  # MODEL ARCHITECTURE (tune or fix based on data size)
+  # ---------------------------------------------------------------------------
+  input_dim:
+    value: 500  # Should match number of genes in data
+  
+  latent_dim:
+    values: [64, 128, 256]  # Tune latent dimension
+  
+  gmvae_hidden_dim:
+    values: [256, 512, 1024]  # Tune hidden layer size
+  
+  gmvae_use_weight_norm:
+    values: [true, false]  # Test weight normalization
+  
+  # ---------------------------------------------------------------------------
+  # TRAINING HYPERPARAMETERS
+  # ---------------------------------------------------------------------------
+  gmvae_epochs:
+    values: [10, 20, 30]  # Fixed for consistency, or use distribution to tune
+  
+  gmvae_learning_rate:
+    min: 0.00001
+    max: 0.001
+    distribution: log_uniform_values
+  
+  gmvae_batch_size:
+    values: [16, 32, 64]
+  
+  # ---------------------------------------------------------------------------
+  # LOSS WEIGHTS
+  # Note: These affect training dynamics but NOT the evaluation metric
+  # (val_reconstruction_loss is raw, unweighted MSE)
+  # ---------------------------------------------------------------------------
+  gmvae_recon_loss_weight:
+    values: [0.5, 1.0, 10.0]
+  
+  gmvae_zinb_loss_weight:
+    values: [1.0, 10.0]  # ZINB can help with zero-inflated data
+  
+  gmvae_fraction_loss_weight:
+    values: [1.0, 2.0, 5.0]  # Encourages matching cell type proportions
+  
+  gmvae_kl_loss_weight:
+    # value: 0.0  # Often set to 0 for this task, or tune if needed
+    values: [0.0, 0.5, 1.0]  # Uncomment to tune KL weight
+  
+  # ---------------------------------------------------------------------------
+  # RECONSTRUCTION WARMUP (Sigmoid)
+  # Controls how reconstruction loss is ramped up during training
+  # ---------------------------------------------------------------------------
+  gmvae_recon_warmup_steepness:
+    values: [1.0, 2.0, 4.0]  # How steep the S-curve is
+  
+  gmvae_recon_warmup_midpoint:
+    values: [2.0, 3.5, 5.0, 8.0]  # Epoch where warmup reaches ~50%
+
+# ==============================================================================
+# NOTES
+# ==============================================================================
+# 
+# Evaluation Metric: val_metric = val_reconstruction_loss (raw MSE)
+# - Measures how well the model reconstructs gene expression
+# - Independent of tunable loss weights (unbiased)
+# - Typically in range 10,000 - 50,000
+#
+# After completing this sweep:
+# 1. Identify the best run based on val_metric
+# 2. Extract the best hyperparameter configuration
+# 3. Use that configuration in Stage 2 (bulk_encoder_sweep.yaml)
+#
+# Example best config extraction:
+#   best_run = wandb.Api().runs("your-project/b2sc-gmvae-hpt")[0]
+#   best_config = best_run.config
+
