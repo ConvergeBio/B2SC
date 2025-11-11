@@ -95,8 +95,6 @@ class B2SCConfig:
     
     # Advanced options
     normalize_data: bool = True
-    generate_pseudo_cells: bool = False
-    test_samples: List[str] = field(default_factory=list)
 ```
 
 ### 2. Data Management
@@ -109,8 +107,11 @@ class DataManager:
     
     def __init__(self, config: B2SCConfig):
         self.config = config
-        self.sc_data = None
-        self.bulk_data = None
+        # Data storage (works for both approaches)
+        self.sc_train_data = None
+        self.sc_val_data = None
+        self.bulk_train_data = None
+        self.bulk_val_data = None
         self.gene_list = None
         self.cell_type_mapping = None
         

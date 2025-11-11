@@ -23,25 +23,35 @@ Together, these models enable the generation of synthetic single-cell data that 
 
 ## Quick Start
 
-### Simple Pipeline Execution
+### Enhanced Pipeline Execution (Recommended)
 
 ```python
 from B2SC import B2SCConfig, B2SCPipeline
 
-# Configure the pipeline
+# Configure the pipeline with enhanced approach
 config = B2SCConfig(
-    sc_training_data_path="data/single_cell.h5ad",
-    bulk_data_for_deconv_path="data/bulk_samples.h5ad",
+    sc_training_path="data/sc_training.h5ad",
+    sc_validation_path="data/sc_validation.h5ad",  # Optional
+    pseudobulk_groupby="donor_id",  # Column to group by for pseudobulk computation
+    cache_pseudobulk=True,  # Cache computed pseudobulk data
     base_dir="./results"
 )
 
 # Run the complete pipeline
 pipeline = B2SCPipeline(config)
-gmvae_metrics, be_metrics, results = pipeline.run_full_pipeline()
+gmvae_metrics = pipeline.train_gmvae()  # Includes validation if provided
+be_metrics = pipeline.train_bulk_encoder()  # Includes validation if provided
 
-# Access results
-print(f"Generated cells for {len(results.generated_cells)} samples")
-results.save_results(config.base_dir / "generation_results")
+# Generate cells from bulk data
+results = pipeline.generate_cells(
+    bulk_data_path="data/bulk_samples.h5ad",
+    num_cells=200
+)
+
+# Access results with automatic visualization
+print(f"Generated cells for {len(results.sample_ids)} samples")
+results.plot_visualizations()  # Shows plots inline in notebooks
+results.save("./generation_results")
 ```
 
 ## Installation
@@ -193,9 +203,16 @@ metrics = be_trainer.train(dataloader=be_loader)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `sc_training_data_path` | str | **Required** | Path to single-cell RNA-seq training data (.h5ad format) |
-| `bulk_data_for_deconv_path` | str | None | Path to bulk RNA-seq data for deconvolution (.h5ad format) |
-| `barcode_path` | str | None | Path to cell type barcode file (.csv format) |
+| `sc_training_path` | str | **Required** | Path to single-cell training data (.h5ad format) |
+| `sc_validation_path` | str | None | Path to single-cell validation data (.h5ad format) |
+| `pseudobulk_groupby` | str | "donor_id" | Column name to group by for pseudobulk computation |
+| `cache_pseudobulk` | bool | True | Cache computed pseudobulk data to disk for faster reloading |
+
+**Key Features:**
+- ✅ Automatic pseudobulk computation from single-cell data
+- ✅ Built-in validation loss tracking for both models
+- ✅ Disk caching for faster subsequent runs
+- ✅ Consistent data handling and preprocessing
 
 #### Model Architecture
 
@@ -225,7 +242,15 @@ metrics = be_trainer.train(dataloader=be_loader)
 | `bulk_encoder_epochs` | int | 100 | Number of training epochs for BulkEncoder |
 | `gmvae_lr` | float | 5e-4 | Learning rate for GMVAE model |
 | `bulk_encoder_lr` | float | 1e-3 | Learning rate for BulkEncoder model |
-| `batch_size` | int | Auto-calculated | Batch size (typically num_cells/20) |
+
+##### Batch Sizes
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `gmvae_batch_size` | int | 32 | Batch size for GMVAE training |
+| `bulk_encoder_batch_size` | int | 3 | Batch size for BulkEncoder training |
+
+**Note:** For backward compatibility, `batch_size` still works and refers to `gmvae_batch_size`.
 
 #### GMVAE Loss Weights
 
@@ -263,8 +288,6 @@ metrics = be_trainer.train(dataloader=be_loader)
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `normalize_data` | bool | True | Whether to normalize single-cell data |
-| `generate_pseudo_cells` | bool | False | Use clustering instead of cell type labels |
-| `test_samples` | List[str] | [] | Sample IDs to exclude from training |
 
 ### Parameter Selection Guidelines
 
@@ -351,6 +374,59 @@ The pipeline automatically handles:
 - **Normalization**: Log-normalization with target sum 1e4
 - **Gene alignment**: Matches genes between single-cell and bulk data
 - **Cell type encoding**: Converts cell type labels to integers
+
+## Validation and Monitoring
+
+### Automatic Validation Loss Tracking
+
+When using the enhanced approach with `sc_validation_path`, both GMVAE and BulkEncoder training will automatically compute validation losses:
+
+```python
+config = B2SCConfig(
+    sc_training_path="data/sc_train.h5ad",
+    sc_validation_path="data/sc_val.h5ad",  # Enables validation
+    base_dir="./results"
+)
+
+pipeline = B2SCPipeline(config)
+
+# Training automatically includes validation
+gmvae_metrics = pipeline.train_gmvae()
+be_metrics = pipeline.train_bulk_encoder()
+
+# Plot training curves with validation
+gmvae_metrics.plot_training_curves(save_path="./gmvae_curves.png")
+be_metrics.plot_training_curves(save_path="./be_curves.png")
+```
+
+### Training Metrics Visualization
+
+The enhanced plotting includes both training and validation curves:
+
+- **Solid lines**: Training losses
+- **Dashed lines**: Validation losses
+- **Automatic legends**: Clear distinction between training/validation
+- **Stacked loss contributions**: Detailed breakdown of loss components
+
+### Disk Caching
+
+Pseudobulk computation is automatically cached to speed up subsequent runs:
+
+```python
+config = B2SCConfig(
+    sc_training_path="data/sc_train.h5ad",
+    cache_pseudobulk=True,  # Default: True
+    base_dir="./results"
+)
+
+# First run: Computes and caches pseudobulk
+pipeline = B2SCPipeline(config)
+
+# Subsequent runs: Loads from cache (much faster)
+pipeline2 = B2SCPipeline(config)
+```
+
+Cache files are stored in `{base_dir}/cache/` with content-based hashing for validation.
 
 ## Advanced Usage
 

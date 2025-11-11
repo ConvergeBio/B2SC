@@ -33,7 +33,6 @@ def simple_pipeline_example():
         base_dir=Path("./results_simple"),
         gmvae_epochs=30,
         bulk_encoder_epochs=100,
-        num_cells_to_generate=500,
     )
 
     # Run complete pipeline
@@ -67,8 +66,6 @@ def advanced_pipeline_example():
         bulk_encoder_lr=1e-3,
         hidden_dim=1024,  # Smaller hidden dimension
         latent_dim=512,
-        num_cells_to_generate=1000,  # Generate more cells
-        test_samples=["3-M-8/9"],  # Exclude specific samples from training
     )
 
     # Initialize pipeline
@@ -86,8 +83,10 @@ def advanced_pipeline_example():
     best_epoch = gmvae_metrics.get_best_epoch()
     print(f"Best GMVAE epoch: {best_epoch}")
 
-    # Generate training curves
-    gmvae_metrics.plot_training_curves(config.base_dir / "gmvae_curves.png")
+    # Generate detailed training visualizations
+    gmvae_metrics.plot_detailed_loss_grid(
+        config.base_dir / "gmvae_detailed_loss_grid.png", config=config
+    )
 
     # Step 2: Train BulkEncoder
     print("\n--- Training BulkEncoder ---")
@@ -159,9 +158,7 @@ def configuration_examples():
         bulk_encoder_lr=1e-3,
         hidden_dim=4096,
         latent_dim=2048,
-        num_cells_to_generate=5000,
         normalize_data=True,
-        generate_pseudo_cells=False,
     )
     print(
         f"   Architecture: {research_config.input_dim} -> {research_config.hidden_dim} -> {research_config.latent_dim}"
@@ -169,7 +166,7 @@ def configuration_examples():
     print(
         f"   Training: GMVAE={research_config.gmvae_epochs}, BE={research_config.bulk_encoder_epochs}"
     )
-    print(f"   Generation: {research_config.num_cells_to_generate} cells per sample")
+    print(f"   Generation: 500 cells per sample (default)")
 
     print("\nConfiguration examples completed!")
 

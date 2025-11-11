@@ -1,0 +1,130 @@
+# BulkEncoder Hyperparameter Tuning - W&B Sweep Configuration (Stage 2)
+# This sweep optimizes BulkEncoder hyperparameters using a fixed GMVAE configuration.
+# IMPORTANT: Update GMVAE parameters below with best config from Stage 1!
+
+# W&B project configuration
+project: b2sc-bulk-encoder-hpt
+name: bulk_encoder_v1_251110_high_uniform_penalty  # Optional: sweep name (leave blank for auto-generated)
+
+# Optimization strategy
+method: bayes
+
+# Primary metric: validation pis loss (raw, unweighted)
+# This metric is independent of tunable loss weights and directly measures
+# how accurately the model predicts cell type proportions
+metric:
+  name: val_metric  # This will be val_pis_loss
+  goal: minimize
+
+# Early termination (optional - uncomment to enable)
+# early_terminate:
+#   type: envelope
+#   min_iter: 5
+#   tolerance: 0.05
+
+# ==============================================================================
+# HYPERPARAMETER SEARCH SPACE
+# ==============================================================================
+parameters:
+  # ---------------------------------------------------------------------------
+  # DATA PATHS (fixed for all runs)
+  # ---------------------------------------------------------------------------
+  sc_training_path:
+    value: "../examples/tutorial_outputs/train_data.h5ad"
+  
+  sc_validation_path:
+    value: "../examples/tutorial_outputs/val_data.h5ad"
+  
+  base_dir:
+    value: "./results"
+  
+  # ---------------------------------------------------------------------------
+  # PRE-TRAINED GMVAE PATH (from Stage 1 best run)
+  # ⚠️ CRITICAL: Update this with the directory of your best GMVAE run!
+  # ---------------------------------------------------------------------------
+  pretrained_gmvae_dir:
+    value: "gmvae_hpt_results_v1/gmvae_sweep/proud-sweep-41"
+    # Example: "./results/gmvae_sweep/atomic-sweep-42"
+    # This directory must contain:
+    #   - GMVAE_model.pt
+    #   - GMVAE_mus.pt
+    #   - GMVAE_logvars.pt
+    #   - GMVAE_pis.pt
+  
+  # ---------------------------------------------------------------------------
+  # MODEL ARCHITECTURE
+  # Note: Must match the pre-trained GMVAE architecture
+  # ---------------------------------------------------------------------------
+  input_dim:
+    value: 500  # Must match GMVAE
+  
+  latent_dim:
+    value: 256  # Must match GMVAE (from proud-sweep-41: n_components=2, so latent_dim = 512/2 = 256)
+  
+  # Note: GMVAE hyperparameters (hidden_dim, use_weight_norm, etc.) are
+  # automatically detected from the loaded model - no need to specify them!
+  
+  # ---------------------------------------------------------------------------
+  # BULK ENCODER HYPERPARAMETERS (TUNED in this sweep)
+  # ---------------------------------------------------------------------------
+  bulk_encoder_hidden_dim:
+    values: [512]  # Tune hidden layer size
+  
+  bulk_encoder_epochs:
+    values: [10, 20, 50]  # Fixed for consistency
+  
+  bulk_encoder_learning_rate:
+    min: 0.00001
+    max: 0.001
+    distribution: log_uniform_values
+  
+  bulk_encoder_batch_size:
+    values: [4, 16,32, 64]
+  
+  # ---------------------------------------------------------------------------
+  # BULK ENCODER LOSS WEIGHTS
+  # Note: These affect training dynamics but NOT the evaluation metric
+  # (val_pis_loss is raw, unweighted MSE)
+  # ---------------------------------------------------------------------------
+  bulk_encoder_mus_loss_weight:
+    values: [0.5, 1.0, 2.0]
+  
+  bulk_encoder_logvars_loss_weight:
+    values: [0.5, 1.0, 2.0]
+  
+  bulk_encoder_pis_loss_weight:
+    values: [10.0]  # Often higher to emphasize proportion prediction
+  
+  bulk_encoder_uniform_penalty_weight:
+    values: [10]  # Penalty against uniform distributions
+
+# ==============================================================================
+# NOTES
+# ==============================================================================
+#
+# Evaluation Metric: val_metric = val_pis_loss (raw MSE)
+# - Measures how accurately the model predicts cell type proportions (pis)
+# - Independent of tunable loss weights (unbiased)
+# - Typically in range 0.001 - 0.1
+#
+# Setup Instructions:
+# 1. Complete Stage 1 (gmvae_sweep.py) to train and identify best GMVAE
+# 2. Update pretrained_gmvae_dir above to point to best GMVAE run directory
+#    Example: "./results/gmvae_sweep/atomic-sweep-42"
+# 3. Ensure input_dim and latent_dim match the pre-trained GMVAE
+# 4. Run this sweep to tune BulkEncoder hyperparameters
+#
+# Note: GMVAE architecture (hidden_dim, use_weight_norm) is auto-detected from
+# the saved model, so you don't need to specify those parameters!
+#
+# The pretrained_gmvae_dir must contain:
+#   - GMVAE_model.pt (trained model weights)
+#   - GMVAE_mus.pt (latent means)
+#   - GMVAE_logvars.pt (latent log variances)  
+#   - GMVAE_pis.pt (mixture weights)
+#
+# The script will:
+# - Load the pre-trained GMVAE (NO training)
+# - Train only the BulkEncoder with different hyperparameters
+# - Optimize val_pis_loss (cell type proportion accuracy)
+

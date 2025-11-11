@@ -9,14 +9,79 @@ import numpy as np
 from torch.utils.data import TensorDataset, DataLoader, Dataset
 import anndata
 from termcolor import colored
-from sklearn.cluster import KMeans
 from pathlib import Path
 from typing import Tuple, List, Dict, Optional, Any
 from config import B2SCConfig
 
 
+class DonorGroupedCellsDataset(Dataset):
+    """
+    Dataset that groups cells by donor and returns the full cell matrix.
+
+    For GMVAE training: Returns all cells from a donor as a matrix (NOT summed).
+    This preserves individual cell information for cell-level processing.
+
+    Returns:
+        data: Tensor of shape (num_cells_in_donor, n_genes)
+        cell_type_labels: Tensor of shape (num_cells_in_donor,) with encoded cell types
+        donor_id: String identifier for the donor
+    """
+
+    def __init__(self, adata, donor_col: str = "donor_id"):
+        self.adata = adata
+        self.donor_col = donor_col
+
+        # Unique donors
+        self.donor_ids = self.adata.obs[donor_col].unique().tolist()
+
+        # Group indices by donor
+        self.grouped_indices = {
+            donor: np.where(self.adata.obs[donor_col] == donor)[0]
+            for donor in self.donor_ids
+        }
+
+        # Validate that cell_type_encoded exists
+        if "cell_type_encoded" not in self.adata.obs.columns:
+            raise ValueError(
+                "cell_type_encoded column not found in adata.obs. "
+                "Please encode cell types before creating dataset."
+            )
+
+    def __len__(self):
+        return len(self.donor_ids)
+
+    def __getitem__(self, idx):
+        donor = self.donor_ids[idx]
+        indices = self.grouped_indices[donor]
+
+        # Get cell matrix for this donor (NOT summed)
+        donor_cell_matrix = self.adata.X[indices]
+
+        # If sparse, convert to dense
+        if not isinstance(donor_cell_matrix, np.ndarray):
+            donor_cell_matrix = donor_cell_matrix.toarray()
+
+        # Get cell type labels for these cells
+        cell_type_labels = self.adata.obs.iloc[indices]["cell_type_encoded"].values
+
+        # Validate dimensions
+        assert donor_cell_matrix.shape[0] == len(cell_type_labels), (
+            f"Mismatch: cell matrix has {donor_cell_matrix.shape[0]} cells "
+            f"but got {len(cell_type_labels)} labels for donor {donor}"
+        )
+
+        # Return tensors
+        return (
+            torch.tensor(
+                donor_cell_matrix, dtype=torch.float32
+            ),  # (num_cells, n_genes)
+            torch.tensor(cell_type_labels, dtype=torch.long),  # (num_cells,)
+            donor,  # donor_id as string
+        )
+
+
 class DonorGroupedDataset(Dataset):
-    """Dataset that groups cells by donor and returns summed expression per donor."""
+    """Dataset that groups cells by donor and returns summed expression per donor (for BulkEncoder)."""
 
     def __init__(self, adata, donor_col: str = "donor_id"):
         self.adata = adata
@@ -45,13 +110,69 @@ class DonorGroupedDataset(Dataset):
         return torch.tensor(summed, dtype=torch.float32), donor
 
 
+def _gmvae_flatten_collate_fn(batch):
+    """
+    Custom collate function for GMVAE dataloader.
+
+    Flattens cells from multiple donors into a single batch.
+    This allows batch_size to represent number of donors, while processing
+    all their cells together.
+
+    Args:
+        batch: List of tuples (data, cell_type_labels, donor_id)
+               where data.shape = (num_cells_i, n_genes) for donor i
+
+    Returns:
+        data: Tensor of shape (total_cells, n_genes) - flattened across donors
+        cell_type_labels: Tensor of shape (total_cells,) - flattened
+        num_cells_per_donor: Tensor of shape (batch_size,) - cells per donor
+        donor_ids: List of donor_id strings
+    """
+    # Unpack batch
+    data_list, labels_list, donor_ids = zip(*batch)
+
+    # Get dimensions
+    batch_size = len(data_list)  # Number of donors
+    num_cells_per_donor = [d.shape[0] for d in data_list]
+    total_cells = sum(num_cells_per_donor)
+    n_genes = data_list[0].shape[1]
+
+    # Flatten all cells from all donors
+    flattened_data = torch.cat(data_list, dim=0)  # (total_cells, n_genes)
+    flattened_labels = torch.cat(labels_list, dim=0)  # (total_cells,)
+
+    # Validation assertions
+    assert flattened_data.shape == (total_cells, n_genes), (
+        f"Expected flattened data shape ({total_cells}, {n_genes}), "
+        f"got {flattened_data.shape}"
+    )
+    assert flattened_labels.shape == (total_cells,), (
+        f"Expected flattened labels shape ({total_cells},), "
+        f"got {flattened_labels.shape}"
+    )
+    assert flattened_data.shape[0] == flattened_labels.shape[0], (
+        f"Mismatch: flattened_data has {flattened_data.shape[0]} cells "
+        f"but flattened_labels has {flattened_labels.shape[0]} labels"
+    )
+
+    num_cells_tensor = torch.tensor(num_cells_per_donor, dtype=torch.long)
+
+    return flattened_data, flattened_labels, num_cells_tensor, list(donor_ids)
+
+
 class DataManager:
     """Handles all data loading, preprocessing, and validation."""
 
     def __init__(self, config: B2SCConfig):
         self.config = config
-        self.sc_data = None
-        self.bulk_data = None
+
+        # Data storage (works for both approaches)
+        self.sc_train_data = None
+        self.sc_val_data = None
+        self.bulk_train_data = None
+        self.bulk_val_data = None
+
+        # Common metadata
         self.gene_list = None
         self.cell_type_mapping = None
         self.color_map = None
@@ -59,55 +180,252 @@ class DataManager:
 
     def load_single_cell_data(self) -> Tuple[DataLoader, DataLoader]:
         """Load and preprocess single-cell data for GMVAE and BulkEncoder training."""
+        return self._load_sc_based_data()
+
+    def _load_sc_based_data(self) -> Tuple[DataLoader, DataLoader]:
+        """Load data using the new approach (sc_training_path + sc_validation_path)."""
         print(colored("Loading single-cell data...", "yellow"))
 
-        # Load data
-        (
-            gmvae_dataset,
-            be_dataset,
-            X_train,
-            y_train,
-            cell_type_fractions,
-            mapping_dict,
-            gene_list,
-        ) = self._load_data(
-            data_dir=self.config.sc_training_data_path,
-            barcode_path=self.config.barcode_path,
-            generate_pseudo_cells=self.config.generate_pseudo_cells,
-            test_samples=self.config.test_samples,
-            normalize_data=self.config.normalize_data,
+        # Load training data
+        print(f"Loading training data from: {self.config.sc_training_path}")
+        self.sc_train_data = sc.read_h5ad(self.config.sc_training_path)
+
+        # Load validation data if provided
+        if self.config.sc_validation_path:
+            print(f"Loading validation data from: {self.config.sc_validation_path}")
+            self.sc_val_data = sc.read_h5ad(self.config.sc_validation_path)
+
+        # Compute pseudobulk data with caching
+        self.bulk_train_data = self._compute_pseudobulk(
+            self.sc_train_data, dataset_type="train"
         )
 
-        # Store for later use
-        self.gene_list = gene_list
-        self.cell_type_mapping = mapping_dict
-        self.cell_type_fractions = torch.FloatTensor(cell_type_fractions)
-        self.color_map = self._get_colormap()
+        if self.sc_val_data is not None:
+            self.bulk_val_data = self._compute_pseudobulk(
+                self.sc_val_data, dataset_type="validation"
+            )
 
-        # Auto-detect dimensions if not set
-        if self.config.input_dim is None:
-            self.config.input_dim = len(gene_list)
+        # Extract metadata from training data
+        self._extract_metadata_from_sc_data(self.sc_train_data)
 
-        # Auto-calculate batch size if not set
-        if self.config.batch_size is None:
-            self.config.batch_size = len(gmvae_dataset) // 20
+        # Apply the same cell type encoding to validation data if it exists
+        if self.sc_val_data is not None:
+            self._apply_cell_type_encoding(self.sc_val_data)
 
-        print(f"Loaded {len(gmvae_dataset)} cells with {len(gene_list)} genes")
-        print(f"Found {len(mapping_dict)} cell types")
-        print(f"Batch size: {self.config.batch_size}")
+        # Validate that cell_type_encoded exists
+        if "cell_type_encoded" not in self.sc_train_data.obs.columns:
+            raise ValueError(
+                "cell_type_encoded column not found in adata.obs. "
+                "Cell types must be encoded before creating dataset."
+            )
 
-        # Create data loaders
+        # Create datasets
+        # GMVAE: Groups cells by donor, then flattens them in collate function
+        # batch_size = number of donors to sample per batch
+        gmvae_train_dataset = DonorGroupedCellsDataset(
+            self.sc_train_data, self.config.pseudobulk_groupby
+        )
+
+        # BulkEncoder: Groups cells by donor, returns summed expression
+        be_train_dataset = DonorGroupedDataset(
+            self.sc_train_data, self.config.pseudobulk_groupby
+        )
+
+        # Create dataloaders
+        # GMVAE dataloader: batch_size = number of donors per batch
+        # The collate function will flatten all cells from those donors
         gmvae_dataloader = DataLoader(
-            gmvae_dataset,
-            batch_size=self.config.batch_size,
+            gmvae_train_dataset,
+            batch_size=self.config.gmvae_batch_size,
             shuffle=True,
-            drop_last=True,
+            collate_fn=_gmvae_flatten_collate_fn,
         )
+
         be_dataloader = DataLoader(
-            be_dataset, batch_size=3, shuffle=True, drop_last=False
+            be_train_dataset,
+            batch_size=self.config.bulk_encoder_batch_size,
+            shuffle=True,
         )
+
+        print(colored("✅ Data loading completed", "green"))
+
+        # Log dimensions for verification
+        sample_batch = next(iter(gmvae_dataloader))
+        data, cell_type_labels, num_cells_per_donor, donor_ids = sample_batch
+        print(colored(f"📊 GMVAE Data Dimensions:", "cyan"))
+        print(f"   Number of donors in batch: {len(donor_ids)}")
+        print(f"   Cells per donor: {num_cells_per_donor.tolist()}")
+        print(f"   Total cells in batch: {data.shape[0]}")
+        print(f"   Data shape: {data.shape}")  # Should be (total_cells, n_genes)
+        print(
+            f"   cell_type_labels shape: {cell_type_labels.shape}"
+        )  # Should be (total_cells,)
+
+        # Validate dimensions
+        total_cells = data.shape[0]
+        n_genes = data.shape[1]
+        num_donors = len(donor_ids)
+        assert (
+            data.ndim == 2
+        ), f"Expected 2D data (total_cells, n_genes), got {data.ndim}D with shape {data.shape}"
+        assert (
+            cell_type_labels.ndim == 1
+        ), f"Expected 1D labels (total_cells,), got {cell_type_labels.ndim}D with shape {cell_type_labels.shape}"
+        assert total_cells == cell_type_labels.shape[0], (
+            f"Cell count mismatch: data has {total_cells} cells "
+            f"but cell_type_labels has {cell_type_labels.shape[0]} labels"
+        )
+        assert (
+            num_donors == self.config.gmvae_batch_size
+            or num_donors <= self.config.gmvae_batch_size
+        ), (
+            f"Batch size issue: expected {self.config.gmvae_batch_size} donors, "
+            f"got {num_donors} (last batch may be smaller)"
+        )
+        assert total_cells == sum(num_cells_per_donor.tolist()), (
+            f"Cell count mismatch: total_cells={total_cells} but "
+            f"sum(num_cells_per_donor)={sum(num_cells_per_donor.tolist())}"
+        )
+        print(colored(f"✅ Dimension validation passed!", "green"))
 
         return gmvae_dataloader, be_dataloader
+
+    def _compute_pseudobulk(
+        self, sc_data: anndata.AnnData, dataset_type: str
+    ) -> anndata.AnnData:
+        """Compute pseudobulk data from single-cell data with caching."""
+        from utilities.helpers import calculate_pseudobulk
+
+        # Generate cache filename
+        cache_dir = Path(self.config.base_dir) / "cache"
+        cache_dir.mkdir(exist_ok=True)
+
+        # Create a hash of the input data for cache validation
+        import hashlib
+
+        data_hash = hashlib.md5(
+            f"{self.config.sc_training_path}_{self.config.sc_validation_path}_{self.config.pseudobulk_groupby}_{dataset_type}".encode()
+        ).hexdigest()[:8]
+
+        cache_file = cache_dir / f"pseudobulk_{dataset_type}_{data_hash}.h5ad"
+
+        # Try to load from cache if enabled
+        if self.config.cache_pseudobulk and cache_file.exists():
+            print(f"Loading cached pseudobulk data for {dataset_type}: {cache_file}")
+            return sc.read_h5ad(cache_file)
+
+        # Compute pseudobulk
+        print(
+            f"Computing pseudobulk data for {dataset_type} (groupby: {self.config.pseudobulk_groupby})..."
+        )
+        pseudobulk_data = calculate_pseudobulk(sc_data, self.config.pseudobulk_groupby)
+
+        # Cache if enabled
+        if self.config.cache_pseudobulk:
+            print(f"Caching pseudobulk data: {cache_file}")
+            pseudobulk_data.write_h5ad(cache_file)
+
+        return pseudobulk_data
+
+    def _extract_metadata_from_sc_data(self, sc_data: anndata.AnnData):
+        """Extract metadata from single-cell data."""
+        # Get gene list
+        self.gene_list = sc_data.var_names.tolist()
+
+        # Create cell type mapping if not exists
+        if "cell_type" in sc_data.obs.columns:
+            unique_cell_types = sc_data.obs["cell_type"].unique()
+            self.cell_type_mapping = {
+                ct: i for i, ct in enumerate(sorted(unique_cell_types))
+            }
+
+            # Add encoded cell types if not present
+            if "cell_type_encoded" not in sc_data.obs.columns:
+                sc_data.obs["cell_type_encoded"] = sc_data.obs["cell_type"].map(
+                    self.cell_type_mapping
+                )
+
+        # Calculate cell type fractions
+        if "cell_type_encoded" in sc_data.obs.columns:
+            cell_type_counts = (
+                sc_data.obs["cell_type_encoded"].value_counts().sort_index()
+            )
+            total_cells = len(sc_data.obs)
+            self.cell_type_fractions = torch.FloatTensor(
+                cell_type_counts.values / total_cells
+            )
+
+        # Set input dimension
+        if self.config.input_dim is None:
+            self.config.input_dim = len(self.gene_list)
+
+        # Set color map
+        self.color_map = self._get_colormap()
+
+        print(
+            f"Extracted metadata: {len(self.gene_list)} genes, {len(self.cell_type_mapping)} cell types"
+        )
+
+    def _apply_cell_type_encoding(self, sc_data: anndata.AnnData):
+        """Apply cell type encoding to data using the existing cell type mapping."""
+        if "cell_type" in sc_data.obs.columns and self.cell_type_mapping is not None:
+            # Add encoded cell types using the mapping from training data
+            if "cell_type_encoded" not in sc_data.obs.columns:
+                sc_data.obs["cell_type_encoded"] = sc_data.obs["cell_type"].map(
+                    self.cell_type_mapping
+                )
+                print(f"Applied cell type encoding to {len(sc_data.obs)} cells")
+
+            # Check for unknown cell types
+            unknown_mask = sc_data.obs["cell_type_encoded"].isna()
+            if unknown_mask.any():
+                unknown_types = sc_data.obs.loc[unknown_mask, "cell_type"].unique()
+                print(
+                    f"Warning: Found unknown cell types in validation data: {unknown_types}"
+                )
+                # For now, we'll drop cells with unknown cell types
+                sc_data._inplace_subset_obs(~unknown_mask)
+                print(f"Removed {unknown_mask.sum()} cells with unknown cell types")
+
+    def get_validation_dataloaders(
+        self,
+    ) -> Tuple[Optional[DataLoader], Optional[DataLoader]]:
+        """Get validation dataloaders if validation data is available."""
+        # Check if validation data is available
+        if (
+            not hasattr(self.config, "sc_validation_path")
+            or not self.config.sc_validation_path
+            or self.sc_val_data is None
+        ):
+            return None, None
+
+        # Create validation datasets
+        # GMVAE: Groups cells by donor, then flattens them in collate function
+        gmvae_val_dataset = DonorGroupedCellsDataset(
+            self.sc_val_data, self.config.pseudobulk_groupby
+        )
+
+        # BulkEncoder: Groups cells by donor, returns summed expression
+        be_val_dataset = DonorGroupedDataset(
+            self.sc_val_data, self.config.pseudobulk_groupby
+        )
+
+        # Create validation dataloaders
+        # GMVAE: batch_size = number of donors per batch
+        gmvae_val_dataloader = DataLoader(
+            gmvae_val_dataset,
+            batch_size=self.config.gmvae_batch_size,
+            shuffle=False,  # No shuffling for validation
+            collate_fn=_gmvae_flatten_collate_fn,
+        )
+
+        be_val_dataloader = DataLoader(
+            be_val_dataset,
+            batch_size=self.config.bulk_encoder_batch_size,
+            shuffle=False,
+        )
+
+        return gmvae_val_dataloader, be_val_dataloader
 
     def load_bulk_data(
         self, bulk_data_path: str = None
@@ -160,166 +478,6 @@ class DataManager:
 
         # Additional validation can be added here
         return True
-
-    def _read_adata(self, data_dir: str) -> sc.AnnData:
-        """Load .h5ad or 10x directory into AnnData, ensure barcode index."""
-        if data_dir.endswith(".h5ad"):
-            adata = sc.read_h5ad(data_dir)
-        else:
-            adata = sc.read_10x_mtx(data_dir, var_names="gene_symbols", cache=True)
-        if adata.obs.index.name is None:
-            adata.obs.index.name = "barcodes"
-        return adata
-
-    def _label_from_csv(
-        self, adata: sc.AnnData, barcode_path: str, drop_labels: set = {"Unknown"}
-    ) -> sc.AnnData:
-        """Merge in real cell-type labels, dropping unwanted ones."""
-        df = pd.read_csv(barcode_path, header=None, names=["barcodes", "labels"]).iloc[
-            1:
-        ]  # skip header row
-        df = df[~df["labels"].isin(drop_labels)]
-        adata = adata[adata.obs.index.isin(df["barcodes"])]
-
-        adata.obs = adata.obs.reset_index(drop=False, names="barcodes").merge(
-            df, on="barcodes", how="left"
-        )
-        return adata
-
-    def _label_by_clustering(
-        self, adata: sc.AnnData, n_clusters: int = 5
-    ) -> sc.AnnData:
-        """Compute PCA → KMeans clusters → store as string labels."""
-        sc.tl.pca(adata, svd_solver="arpack")
-        X_pca = adata.obsm["X_pca"]
-        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
-        clusters = kmeans.fit_predict(X_pca).astype(str)
-        adata.obs["labels"] = clusters
-        return adata
-
-    def _encode_labels(self, labels: pd.Series) -> Tuple[torch.LongTensor, dict]:
-        """Map each unique label (string or digit) to a unique integer, return tensor + reverse mapping."""
-        unique = (
-            list(labels.cat.categories)
-            if hasattr(labels, "cat")
-            else sorted(labels.unique())
-        )
-        label2int = {}
-        next_int = 0
-        for lab in unique:
-            label2int[lab] = int(lab) if lab.isdigit() else next_int
-            next_int = max(next_int, label2int[lab] + 1)
-        int_series = labels.map(label2int).astype(int)
-        return torch.LongTensor(int_series.values), label2int
-
-    def _split_and_package(
-        self,
-        X: np.ndarray,
-        labels: torch.LongTensor,
-        train_frac: float = 1.0,
-        seed: int = 0,
-    ):
-        """Random train-only split, return shuffled TensorDataset + raw arrays."""
-        torch.manual_seed(seed)
-        n = X.shape[0]
-        idx = torch.randperm(n)
-        cut = int(train_frac * n)
-        train_idx = idx[:cut]
-        X_train = torch.Tensor(X[train_idx.numpy()])
-        y_train = labels[train_idx]
-        ds = TensorDataset(X_train, y_train)
-        return ds, X_train, y_train
-
-    def _load_data(
-        self,
-        data_dir: str,
-        barcode_path: str = None,
-        generate_pseudo_cells: bool = False,
-        n_clusters: int = 5,
-        train_frac: float = 1.0,
-        test_samples: List[str] = [],
-        normalize_data: bool = True,
-    ):
-        """Main data loading function."""
-        # Set random seeds for reproducibility
-        np.random.seed(4)
-        torch.manual_seed(4)
-
-        # 1) I/O
-        adata = self._read_adata(data_dir)
-        orig_num_obs = len(adata)
-        if test_samples:
-            # Exclude test samples from training data
-            adata = adata[~adata.obs.donor_id.isin(test_samples)]
-            new_num_obs = len(adata)
-            print(
-                colored(
-                    f"Excluded {orig_num_obs - new_num_obs} samples from training data, "
-                    f"which are {100 * (orig_num_obs - new_num_obs) / orig_num_obs}% of the original data",
-                    "yellow",
-                )
-            )
-
-        if normalize_data:
-            print("Normalizing data...")
-            sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
-            sc.pp.log1p(adata)
-
-        print(f"Sum expression per cell: {adata.X.sum(axis=1)}")
-        print(f"Max sum expression per cell: {adata.X.sum(axis=1).max()}")
-
-        # 2) Labeling
-        if generate_pseudo_cells:
-            adata = self._label_by_clustering(adata, n_clusters=n_clusters)
-        else:
-            if "cell_type" not in adata.obs.columns and barcode_path is None:
-                raise ValueError(
-                    "barcode_path is required unless generate_pseudo_cells=True"
-                )
-            elif "cell_type" in adata.obs.columns:
-                adata.obs["labels"] = adata.obs[
-                    "cell_type"
-                ].cat.remove_unused_categories()
-            else:
-                adata = self._label_from_csv(adata, barcode_path)
-
-        # Force categorical dtype (keeps ordering stable)
-        adata.obs["labels"] = adata.obs["labels"].astype("category")
-        assert len(adata.obs.labels.cat.categories) == len(
-            np.unique(adata.obs.labels)
-        )  # ensure that the number of categories is the same as the number of unique labels
-        normalized_cell_type_counts = adata.obs.labels.value_counts(normalize=True)[
-            adata.obs.labels.value_counts() > 0
-        ]
-        print("Cell types: ", normalized_cell_type_counts)
-
-        # 3) Encoding
-        labels_tensor, mapping_dict = self._encode_labels(adata.obs["labels"])
-        # turn sparse → dense
-        X = adata.X.toarray() if not isinstance(adata.X, np.ndarray) else adata.X
-        gene_list = adata.var_names.tolist()
-
-        # 4) Split & package
-        gmvae_dataset, X_train, y_train = self._split_and_package(
-            X, labels_tensor, train_frac
-        )
-        assert len(normalized_cell_type_counts) == len(np.unique(labels_tensor))
-
-        # compute cell-type (or pseudo-type) fractions on full data
-        counts = adata.obs["labels"].value_counts().sort_index()
-        cell_type_fractions = counts.values / counts.values.sum()
-
-        be_dataset = DonorGroupedDataset(adata)
-
-        return (
-            gmvae_dataset,
-            be_dataset,
-            X_train,
-            y_train,
-            cell_type_fractions,
-            mapping_dict,
-            gene_list,
-        )
 
     def _load_bulk_data_h5ad(
         self,
